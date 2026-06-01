@@ -1,18 +1,18 @@
 package main
 
 import (
+	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
-	"fyne.io/fyne/v2/widget"
 )
 
 func main() {
-	a := app.New()
-	w := a.NewWindow("Hello")
+	a := app.NewWithID("eu.p1ka.gworx")
+	// a.SetIcon()
 
-	w.SetContent(widget.NewButton(
-		"Click me",
-		func() { println("Hello!") },
-	))
+	w := a.NewWindow("GWorX - Garry's Mod Toolkit")
+
+	w.SetContent(loadUI(w))
+	w.Resize(fyne.NewSize(680, 560))
 
 	w.ShowAndRun()
 }
