@@ -22,12 +22,12 @@
           delve
           pkg-config
 
-          xorg.libX11
-          xorg.libXcursor
-          xorg.libXrandr
-          xorg.libXinerama
-          xorg.libXi
-          xorg.libXxf86vm
+          libX11
+          libXcursor
+          libXrandr
+          libXinerama
+          libXi
+          libXxf86vm
 
           mesa
           wayland
