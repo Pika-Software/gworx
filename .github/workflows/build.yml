@@ -1,0 +1,163 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Install GUI dependencies
+        run: sudo apt-get update && sudo apt-get install -y libgl1-mesa-dev xorg-dev libxkbcommon-dev pkg-config
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - run: go vet ./...
+      - run: go test ./...
+      - name: Build CLI-only variant
+        run: CGO_ENABLED=0 go build -tags nogui -o /dev/null .
+
+  cli:
+    name: cli (${{ matrix.goos }}/${{ matrix.goarch }})
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64 }
+          - { goos: linux, goarch: arm64 }
+          - { goos: windows, goarch: amd64 }
+          - { goos: windows, goarch: arm64 }
+          - { goos: darwin, goarch: amd64 }
+          - { goos: darwin, goarch: arm64 }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Version
+        run: echo "VERSION=$(.github/version.sh)" >> "$GITHUB_ENV"
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          name="gworx-cli-${VERSION}-${GOOS}-${GOARCH}"
+          ext=""; [ "$GOOS" = windows ] && ext=".exe"
+          mkdir -p "dist/$name"
+          go build -tags nogui -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o "dist/$name/gworx-cli$ext" .
+          cp README.md LICENSE "dist/$name/"
+          cd dist
+          if [ "$GOOS" = windows ]; then zip -qr "$name.zip" "$name"; else tar -czf "$name.tar.gz" "$name"; fi
+          rm -r "$name"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+          if-no-files-found: error
+
+  gui:
+    name: gui (${{ matrix.goos }}/${{ matrix.goarch }})
+    needs: test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, goos: linux, goarch: amd64 }
+          - { os: windows-latest, goos: windows, goarch: amd64 }
+          - { os: macos-latest, goos: darwin, goarch: arm64 }
+          - { os: macos-15-intel, goos: darwin, goarch: amd64 }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Install GUI dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libgl1-mesa-dev xorg-dev libxkbcommon-dev pkg-config
+      - name: Version
+        run: echo "VERSION=$(.github/version.sh)" >> "$GITHUB_ENV"
+      - name: Build
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          name="gworx-${VERSION}-${{ matrix.goos }}-${{ matrix.goarch }}"
+          ext=""; ldflags="-s -w -X main.version=${VERSION}"
+          if [ "${{ matrix.goos }}" = windows ]; then
+            # GUI subsystem: no console window. Use gworx-cli.exe for the command line.
+            ext=".exe"; ldflags="$ldflags -H=windowsgui"
+          fi
+          mkdir -p "dist/$name"
+          go build -trimpath -ldflags "$ldflags" -o "dist/$name/gworx$ext" .
+          cp README.md LICENSE "dist/$name/"
+          cd dist
+          if [ "${{ matrix.goos }}" = windows ]; then
+            7z a -bd "$name.zip" "$name" > /dev/null
+          else
+            tar -czf "$name.tar.gz" "$name"
+          fi
+          rm -r "$name"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gui-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+          if-no-files-found: error
+
+  nix:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: cachix/install-nix-action@v31
+      - run: nix flake check
+      - name: Build packages
+        run: nix build .#gworx .#gworx-cli --print-build-logs
+      - name: Check flake version matches the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          flake="$(nix eval --raw .#gworx.version)"
+          [ "v$flake" = "$GITHUB_REF_NAME" ] || { echo "flake.nix version $flake != tag $GITHUB_REF_NAME"; exit 1; }
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [cli, gui, nix]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: cd dist && sha256sum -- * > SHA256SUMS
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prerelease=""
+          case "$GITHUB_REF_NAME" in *-*) prerelease="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "GWorX $GITHUB_REF_NAME" \
+            --generate-notes $prerelease
