@@ -35,12 +35,12 @@ line. GMA files are read and written with
 
 ## Installation
 
-| Platform    | GUI + CLI                                 | CLI only                                      |
-| ----------- | ----------------------------------------- | --------------------------------------------- |
-| Linux       | `gworx-<ver>-linux-amd64.tar.gz`          | `gworx-cli-<ver>-linux-{amd64,arm64}.tar.gz`  |
-| Windows     | `gworx-<ver>-windows-amd64.zip`           | `gworx-cli-<ver>-windows-{amd64,arm64}.zip`   |
-| macOS       | `gworx-<ver>-darwin-{arm64,amd64}.tar.gz` | `gworx-cli-<ver>-darwin-{arm64,amd64}.tar.gz` |
-| NixOS / Nix | `packages.default`, `packages.gworx-steamworks` | `packages.gworx-cli`                    |
+| Platform    | GUI + CLI                                       | CLI only                                      |
+| ----------- | ----------------------------------------------- | --------------------------------------------- |
+| Linux       | `gworx-<ver>-linux-amd64.tar.gz`                | `gworx-cli-<ver>-linux-{amd64,arm64}.tar.gz`  |
+| Windows     | `gworx-<ver>-windows-amd64.zip`                 | `gworx-cli-<ver>-windows-{amd64,arm64}.zip`   |
+| macOS       | `gworx-<ver>-darwin-{arm64,amd64}.tar.gz`       | `gworx-cli-<ver>-darwin-{arm64,amd64}.tar.gz` |
+| NixOS / Nix | `packages.default`, `packages.gworx-steamworks` | `packages.gworx-cli`                          |
 
 All archives are on the [Releases](https://github.com/Pika-Software/gworx/releases)
 page. Each release has a `SHA256SUMS` file you can check the downloads against:
@@ -121,11 +121,11 @@ nix profile install github:Pika-Software/gworx#gworx-steamworks  # GUI + CLI + S
 nix profile install github:Pika-Software/gworx#gworx-cli         # CLI only
 ```
 
-| Package | Contents |
-|---|---|
-| `gworx` (default) | GUI + CLI. The Steamworks backend uses Garry's Mod's library or a path you set. |
+| Package            | Contents                                                                                                             |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| `gworx` (default)  | GUI + CLI. The Steamworks backend uses Garry's Mod's library or a path you set.                                      |
 | `gworx-steamworks` | The same plus Valve's Steam API in `lib/gworx`. Unfree (redistributable). The flake allows it for this package only. |
-| `gworx-cli` | CLI only. |
+| `gworx-cli`        | CLI only.                                                                                                            |
 
 #### flake.nix (NixOS)
 
@@ -332,59 +332,10 @@ GWorX console shows less there.
 | Downloaded GMAs                                    | `~/gworx/downloads`                                                                             |
 | Extracted addons                                   | `~/gworx/uploads`                                                                               |
 | Built GMAs                                         | `~/gworx/builds`                                                                                |
-| Dedicated servers (default location)               | `~/gworx/servers/<name>` (list in `servers.json` next to the config)                          |
+| Dedicated servers (default location)               | `~/gworx/servers/<name>` (list in `servers.json` next to the config)                            |
 | steamcmd workshop cache                            | `~/gworx/steamcmd`                                                                              |
 
 You can change the folders in **Settings** or with `gworx config set data_dir …`.
-
-## Workshop backends
-
-|               | steamcmd                                                      | Steamworks                                                                           |
-| ------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| Needs         | [steamcmd](https://developer.valvesoftware.com/wiki/SteamCMD) | Steam client running and logged in, an account that owns GMod (Steam API library is bundled) |
-| Download      | anonymous or with your account                                | Garry's Mod must be installed in that Steam client                                   |
-| Upload        | yes                                                           | yes, also sets Workshop tags                                                         |
-| List my items | only with a Steam Web API key + SteamID64                     | yes                                                                                  |
-| Delete        | no                                                            | yes                                                                                  |
-
-**steamcmd**:
-
-- **Login:** log in once (from **Settings → Log in to Steam…** or `gworx login`)
-  and steamcmd caches the login. Later uploads only pass your username.
-- **Password:** GWorX never saves it.
-- **Finding steamcmd:** GWorX looks for it on your `PATH`. You can also set the
-  path yourself.
-
-**Steamworks** works the same way as
-[nwmpublisher](https://github.com/DeisDev/nwmpublisher):
-
-- **Library:** GWorX ships Valve's redistributable Steam API next to the
-  binary (see [`third_party/steamworks`](third_party/steamworks)). It loads the
-  library at runtime, so building GWorX needs neither the SDK nor cgo. GWorX
-  looks for it in this order:
-  1. the path set in Settings (`steam_api_path`);
-  2. next to the `gworx` binary;
-  3. `../lib/gworx/` relative to the binary (Linux packages, Nix);
-  4. a Garry's Mod install (`bin/win64`, or `bin/linux64` on the x86-64 branch).
-- **Connecting:** GWorX starts as Garry's Mod (app 4000). If Steam isn't ready
-  yet, it retries for up to a minute.
-- **Downloads:** Steam downloads the item into its own Workshop folder.
-  GWorX stops a download that makes no progress for 2 minutes.
-- **While connected:** your friends list shows you in Garry's Mod, "In the
-  Workshop".
-
-## Releasing
-
-1. Bump `version` in `flake.nix`. If `go.sum` changed, also update
-   `vendorHash` (`nix build .#gworx` prints the correct hash).
-2. Tag and push: `git tag v0.1.0 && git push origin v0.1.0`.
-
-The `Build` workflow then:
-
-1. runs the tests;
-2. builds every archive;
-3. checks that the flake version matches the tag;
-4. publishes a GitHub release with the archives and `SHA256SUMS`.
 
 ## Development
 
