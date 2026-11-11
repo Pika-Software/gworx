@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>eu.p1ka.gworx</id>
+  <name>GWorX</name>
+  <summary>Garry's Mod toolkit for Workshop and GMA files</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <developer id="eu.p1ka">
+    <name>p1ka</name>
+  </developer>
+  <url type="homepage">https://github.com/Pika-Software/gworx</url>
+  <url type="bugtracker">https://github.com/Pika-Software/gworx/issues</url>
+  <description>
+    <p>
+      GWorX downloads and uploads Garry's Mod Workshop addons, and builds or
+      extracts .gma files. It includes a desktop UI and a command-line interface.
+    </p>
+    <p>
+      This package ships Valve's redistributable Steam API library for the
+      Steamworks backend. The steamcmd backend needs a separate steamcmd install
+      on the host.
+    </p>
+  </description>
+  <launchable type="desktop-id">eu.p1ka.gworx.desktop</launchable>
+  <provides>
+    <binary>gworx</binary>
+  </provides>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-11-12"/>
+  </releases>
+</component>

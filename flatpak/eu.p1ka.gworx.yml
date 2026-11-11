@@ -1,0 +1,63 @@
+# Flatpak manifest for GWorX (eu.p1ka.gworx).
+# Build: flatpak-builder --user --install --force-clean build-dir flatpak/eu.p1ka.gworx.yml
+# Bundle: flatpak build-bundle repo gworx.flatpak eu.p1ka.gworx
+app-id: eu.p1ka.gworx
+runtime: org.freedesktop.Platform
+runtime-version: "25.08"
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.golang
+command: gworx
+finish-args:
+  - --share=network
+  - --share=ipc
+  - --socket=fallback-x11
+  - --socket=wayland
+  - --device=dri
+  - --filesystem=home
+  - --filesystem=xdg-run/steam:ro
+  - --filesystem=~/.steam:ro
+  - --filesystem=~/.local/share/Steam:ro
+  - --filesystem=~/.var/app/com.valvesoftware.Steam:ro
+modules:
+  - name: gworx
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/golang/bin
+      env:
+        CGO_ENABLED: "1"
+        GOBIN: /app/bin
+        GOFLAGS: -mod=vendor
+        # Use the SDK extension's Go; do not fetch toolchains at build time.
+        GOTOOLCHAIN: local
+    build-commands:
+      - |
+        set -euo pipefail
+        ver=0.1.0
+        if [ -f .flatpak-version ]; then
+          ver=$(cat .flatpak-version)
+        fi
+        go build -trimpath -ldflags "-s -w -X main.version=${ver}" -o gworx .
+      - install -Dm755 gworx /app/bin/gworx
+      - |
+        set -euo pipefail
+        case "${FLATPAK_ARCH}" in
+          x86_64) steam=linux64 ;;
+          aarch64) steam=linuxarm64 ;;
+          *) echo "unsupported FLATPAK_ARCH=${FLATPAK_ARCH}"; exit 1 ;;
+        esac
+        install -Dm644 "third_party/steamworks/${steam}/libsteam_api.so" /app/lib/gworx/libsteam_api.so
+        install -Dm644 third_party/steamworks/README.md /app/share/doc/gworx/STEAMWORKS.md
+      - install -Dm644 flatpak/eu.p1ka.gworx.desktop /app/share/applications/eu.p1ka.gworx.desktop
+      - install -Dm644 flatpak/eu.p1ka.gworx.metainfo.xml /app/share/metainfo/eu.p1ka.gworx.metainfo.xml
+      - install -Dm644 flatpak/eu.p1ka.gworx.svg /app/share/icons/hicolor/scalable/apps/eu.p1ka.gworx.svg
+    sources:
+      - type: dir
+        path: ..
+        skip:
+          - .git
+          - result
+          - flatpak/.flatpak-builder
+          - flatpak/build-dir
+          - flatpak/repo
+      - go.mod.yml

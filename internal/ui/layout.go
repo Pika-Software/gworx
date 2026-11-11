@@ -121,11 +121,54 @@ func insetSides(o fyne.CanvasObject) *fyne.Container {
 }
 
 // greyPanel is a rounded input-background panel with inner padding.
+// The fill follows light/dark theme changes via themedInputBg.
 func greyPanel(o fyne.CanvasObject) fyne.CanvasObject {
-	bg := canvas.NewRectangle(theme.Color(theme.ColorNameInputBackground))
-	bg.CornerRadius = theme.InputRadiusSize()
 	p := theme.InnerPadding()
-	return container.NewStack(bg, container.New(insetLayout{p, p, p, p}, o))
+	return container.NewStack(newThemedInputBg(), container.New(insetLayout{p, p, p, p}, o))
+}
+
+// themedInputBg is a rounded ColorNameInputBackground rect that refreshes with the theme.
+type themedInputBg struct {
+	widget.BaseWidget
+}
+
+func newThemedInputBg() *themedInputBg {
+	b := &themedInputBg{}
+	b.ExtendBaseWidget(b)
+	return b
+}
+
+func (b *themedInputBg) CreateRenderer() fyne.WidgetRenderer {
+	rect := canvas.NewRectangle(color.Transparent)
+	r := &themedInputBgRenderer{b: b, rect: rect}
+	r.Refresh()
+	return r
+}
+
+type themedInputBgRenderer struct {
+	b    *themedInputBg
+	rect *canvas.Rectangle
+}
+
+func (r *themedInputBgRenderer) Destroy() {}
+
+func (r *themedInputBgRenderer) Objects() []fyne.CanvasObject {
+	return []fyne.CanvasObject{r.rect}
+}
+
+func (r *themedInputBgRenderer) Layout(size fyne.Size) {
+	r.rect.Resize(size)
+}
+
+func (r *themedInputBgRenderer) MinSize() fyne.Size { return fyne.NewSize(0, 0) }
+
+func (r *themedInputBgRenderer) Refresh() {
+	th := r.b.Theme()
+	v := fyne.CurrentApp().Settings().ThemeVariant()
+	r.rect.FillColor = th.Color(theme.ColorNameInputBackground, v)
+	r.rect.CornerRadius = th.Size(theme.SizeNameInputRadius)
+	r.rect.Refresh()
+	canvas.Refresh(r.b)
 }
 
 // framePad adds inner padding inside a card/frame.

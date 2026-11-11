@@ -1,10 +1,18 @@
 {
   description = "GWorX - Garry's Mod toolkit";
 
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    nix-appimage.url = "github:ralismark/nix-appimage";
+    nix-appimage.inputs.nixpkgs.follows = "nixpkgs";
+  };
 
   outputs =
-    { self, nixpkgs }:
+    {
+      self,
+      nixpkgs,
+      nix-appimage,
+    }:
     let
       lib = nixpkgs.lib;
       version = "0.1.0";
@@ -14,6 +22,11 @@
         "aarch64-linux"
       ];
       forAllSystems = f: lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
+
+      appImageArch = {
+        x86_64-linux = "x86_64";
+        aarch64-linux = "aarch64";
+      };
 
       src = lib.fileset.toSource {
         root = ./.;
@@ -153,17 +166,24 @@
       packages = forAllSystems (
         pkgs:
         let
+          system = pkgs.stdenv.hostPlatform.system;
           gworx = mkGworx pkgs;
           # Opt in to the unfree Steam API for this one package only.
           unfreePkgs = import nixpkgs {
-            system = pkgs.stdenv.hostPlatform.system;
+            inherit system;
             config.allowUnfreePredicate = p: lib.getName p == "gworx-steamworks";
           };
+          gworx-steamworks = mkGworxSteamworks unfreePkgs;
         in
         {
-          inherit gworx;
+          inherit gworx gworx-steamworks;
           gworx-cli = mkGworxCli pkgs;
-          gworx-steamworks = mkGworxSteamworks unfreePkgs;
+          # Bundles gworx-steamworks + its closure (including libsteam_api) into one AppImage.
+          gworx-appimage = nix-appimage.lib.${system}.mkAppImage {
+            program = lib.getExe gworx-steamworks;
+            pname = "gworx";
+            name = "gworx-${version}-${appImageArch.${system}}.AppImage";
+          };
           default = gworx;
         }
       );

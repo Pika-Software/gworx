@@ -1,0 +1,12 @@
+# Nix
+/result
+/result-*
+
+# Flatpak build cache / generated version stamp
+.flatpak-builder/
+.flatpak-version
+
+# Local / CI build output
+/dist/
+*.AppImage
+*.flatpak

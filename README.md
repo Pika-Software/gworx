@@ -37,7 +37,7 @@ line. GMA files are read and written with
 
 | Platform    | GUI + CLI                                       | CLI only                                      |
 | ----------- | ----------------------------------------------- | --------------------------------------------- |
-| Linux       | `gworx-<ver>-linux-amd64.tar.gz`                | `gworx-cli-<ver>-linux-{amd64,arm64}.tar.gz`  |
+| Linux       | tarball, AppImage, Flatpak                      | `gworx-cli-<ver>-linux-{amd64,arm64}.tar.gz`  |
 | Windows     | `gworx-<ver>-windows-amd64.zip`                 | `gworx-cli-<ver>-windows-{amd64,arm64}.zip`   |
 | macOS       | `gworx-<ver>-darwin-{arm64,amd64}.tar.gz`       | `gworx-cli-<ver>-darwin-{arm64,amd64}.tar.gz` |
 | NixOS / Nix | `packages.default`, `packages.gworx-steamworks` | `packages.gworx-cli`                          |
@@ -61,8 +61,26 @@ You also need a Workshop backend. See [Workshop backends](#workshop-backends).
 
 ### Linux
 
-The GUI build needs OpenGL and the X11 libraries. Most desktops already have
-them. If not, install them:
+**Flatpak** (app id `eu.p1ka.gworx`, includes the Steam API library):
+
+```sh
+flatpak install --user gworx-*-x86_64.flatpak
+flatpak run eu.p1ka.gworx
+```
+
+**AppImage** (includes the Steam API library): download
+`gworx-<ver>-x86_64.AppImage`, mark it executable, and run it:
+
+```sh
+chmod +x gworx-*-x86_64.AppImage
+./gworx-*-x86_64.AppImage
+```
+
+The AppImage needs Linux user namespaces (enabled on most desktops). On non-NixOS
+systems the GUI may also need a working OpenGL driver from the host.
+
+**tarball**: the GUI build needs OpenGL and the X11 libraries. Most desktops
+already have them. If not, install them:
 
 ```sh
 # Debian / Ubuntu
@@ -125,6 +143,7 @@ nix profile install github:Pika-Software/gworx#gworx-cli         # CLI only
 | ------------------ | -------------------------------------------------------------------------------------------------------------------- |
 | `gworx` (default)  | GUI + CLI. The Steamworks backend uses Garry's Mod's library or a path you set.                                      |
 | `gworx-steamworks` | The same plus Valve's Steam API in `lib/gworx`. Unfree (redistributable). The flake allows it for this package only. |
+| `gworx-appimage`   | AppImage of `gworx-steamworks` (closure + Steam API). Build with `nix build .#gworx-appimage`.                       |
 | `gworx-cli`        | CLI only.                                                                                                            |
 
 #### flake.nix (NixOS)

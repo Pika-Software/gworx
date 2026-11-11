@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=GWorX
+GenericName=Garry's Mod toolkit
+Comment=Workshop downloads/uploads and GMA packing for Garry's Mod
+Exec=gworx
+Icon=eu.p1ka.gworx
+Terminal=false
+Type=Application
+Categories=Development;Utility;Game;
+Keywords=gmod;gma;workshop;steam;
+StartupWMClass=eu.p1ka.gworx

@@ -77,9 +77,7 @@ func (t *sideTabs) CreateRenderer() fyne.WidgetRenderer {
 	for _, b := range t.buttons {
 		nav.Add(b)
 	}
-	bg := canvas.NewRectangle(theme.Color(theme.ColorNameInputBackground))
-	bg.CornerRadius = theme.InputRadiusSize()
-	rail := container.NewStack(bg, nav)
+	rail := container.NewStack(newThemedInputBg(), nav)
 	root := container.NewBorder(nil, nil, rail, nil, t.stack)
 	return widget.NewSimpleRenderer(root)
 }

@@ -124,7 +124,7 @@ func (p *serverPage) create() {
 	}
 
 	branch := widget.NewSelectEntry(server.Branches)
-	branch.SetText("x86-64")
+	branch.SetText("public")
 
 	items := []*widget.FormItem{
 		widget.NewFormItem("Name", name),

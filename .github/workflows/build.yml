@@ -129,15 +129,48 @@ jobs:
       - run: nix flake check
       - name: Build packages
         run: nix build .#gworx .#gworx-cli .#gworx-steamworks --print-build-logs
+      - name: Build AppImage
+        run: |
+          mkdir -p dist
+          name="$(nix eval --raw .#gworx-appimage.name)"
+          nix build .#gworx-appimage --print-build-logs --out-link "dist/$name"
+          # Replace the out-link with a real file so the artifact keeps the derivation name.
+          cp -L --remove-destination "dist/$name" "dist/$name.tmp"
+          mv "dist/$name.tmp" "dist/$name"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: appimage-linux-amd64
+          path: dist/*.AppImage
+          if-no-files-found: error
       - name: Check flake version matches the tag
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
           flake="$(nix eval --raw .#gworx.version)"
           [ "v$flake" = "$GITHUB_REF_NAME" ] || { echo "flake.nix version $flake != tag $GITHUB_REF_NAME"; exit 1; }
 
+  flatpak:
+    name: flatpak (x86_64)
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-25.08
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v5
+      - name: Version
+        run: |
+          ver="$(.github/version.sh)"
+          echo "VERSION=$ver" >> "$GITHUB_ENV"
+          printf '%s\n' "$ver" > .flatpak-version
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: gworx-${{ env.VERSION }}-x86_64.flatpak
+          manifest-path: flatpak/eu.p1ka.gworx.yml
+          artifact-name: flatpak-x86_64
+          cache-key: flatpak-eu.p1ka.gworx-${{ hashFiles('flatpak/eu.p1ka.gworx.yml', 'flatpak/go.mod.yml', 'flatpak/modules.txt', 'go.mod', 'go.sum') }}
+
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [test, cli, gui, nix]
+    needs: [test, cli, gui, nix, flatpak]
     runs-on: ubuntu-latest
     permissions:
       contents: write
