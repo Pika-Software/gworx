@@ -143,8 +143,6 @@ func init() {
 	}
 }
 
-// --- shared setup -----------------------------------------------------------
-
 type env struct {
 	fs      *flag.FlagSet
 	backend *string
@@ -239,8 +237,6 @@ func printJSON(v any) error {
 	return enc.Encode(v)
 }
 
-// --- output -----------------------------------------------------------------
-
 // printer writes log lines and a progress indicator to stderr.
 type printer struct {
 	mu       sync.Mutex
@@ -318,8 +314,6 @@ func (prompter) GuardCode(user, hint string) (string, bool) {
 	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
 	return strings.TrimSpace(line), err == nil || (errors.Is(err, io.EOF) && line != "")
 }
-
-// --- workshop commands ------------------------------------------------------
 
 func cmdDownload(ctx context.Context, name string, args []string) error {
 	e := newEnv(name, "<id|url>...", true)
@@ -669,8 +663,6 @@ func cmdLogin(ctx context.Context, name string, args []string) error {
 	return nil
 }
 
-// --- GMA commands -----------------------------------------------------------
-
 type buildFlags struct {
 	title, desc, author, typ, tags, require, ignore *string
 	version                                         *int
@@ -917,8 +909,6 @@ func cmdInfo(ctx context.Context, name string, args []string) error {
 	}
 	return nil
 }
-
-// --- config -----------------------------------------------------------------
 
 func cmdConfig(ctx context.Context, name string, args []string) error {
 	e := newEnv(name, "[get <key> | set <key> <value> | path]", false)

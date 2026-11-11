@@ -28,7 +28,7 @@
       };
 
       # Update with: nix build .#gworx 2>&1 | grep got:
-      vendorHash = "sha256-DIgXyTpVfaJW1O5dWx8yna/qB2Fzsq2X490NZsGahMI=";
+      vendorHash = "sha256-HtWwa8Ww6bo1NQeE6xNs3EK8sZxAhZMu9liJYg+CuDM=";
 
       # Libraries Fyne (GLFW) links against
       guiLibs =
@@ -89,6 +89,33 @@
           };
         };
 
+      # Valve's Steamworks redistributable for the Steamworks backend (unfree, redistributable).
+      steamApiLib = {
+        "x86_64-linux" = "linux64";
+        "aarch64-linux" = "linuxarm64";
+      };
+
+      # gworx with libsteam_api in $out/lib/gworx, where the Steamworks backend looks
+      # for it (like nwmpublisher's /usr/lib/nwmpublisher).
+      mkGworxSteamworks =
+        pkgs:
+        (mkGworx pkgs).overrideAttrs (old: {
+          pname = "gworx-steamworks";
+          # ship Valve's file unmodified
+          stripExclude = [ "lib/gworx/libsteam_api.so" ];
+          postInstall = (old.postInstall or "") + ''
+            install -Dm644 ${./third_party/steamworks}/${
+              steamApiLib.${pkgs.stdenv.hostPlatform.system}
+            }/libsteam_api.so $out/lib/gworx/libsteam_api.so
+          '';
+          meta = old.meta // {
+            license = [
+              lib.licenses.mit
+              lib.licenses.unfreeRedistributable
+            ];
+          };
+        });
+
       # CLI-only build: no Fyne, no cgo, no X11/GL dependencies.
       mkGworxCli =
         pkgs:
@@ -119,10 +146,16 @@
         pkgs:
         let
           gworx = mkGworx pkgs;
+          # Opt in to the unfree Steam API for this one package only.
+          unfreePkgs = import nixpkgs {
+            system = pkgs.stdenv.hostPlatform.system;
+            config.allowUnfreePredicate = p: lib.getName p == "gworx-steamworks";
+          };
         in
         {
           inherit gworx;
           gworx-cli = mkGworxCli pkgs;
+          gworx-steamworks = mkGworxSteamworks unfreePkgs;
           default = gworx;
         }
       );
@@ -131,6 +164,10 @@
         default = {
           type = "app";
           program = "${self.packages.${pkgs.stdenv.hostPlatform.system}.gworx}/bin/gworx";
+        };
+        steamworks = {
+          type = "app";
+          program = "${self.packages.${pkgs.stdenv.hostPlatform.system}.gworx-steamworks}/bin/gworx";
         };
         cli = {
           type = "app";
@@ -141,6 +178,7 @@
       overlays.default = final: prev: {
         gworx = mkGworx final;
         gworx-cli = mkGworxCli final;
+        gworx-steamworks = mkGworxSteamworks final;
       };
 
       devShells = forAllSystems (pkgs: {

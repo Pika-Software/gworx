@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
 	"sync"
@@ -51,6 +52,10 @@ type Config struct {
 	WebAPIKey string `json:"web_api_key"`
 	SteamID64 string `json:"steam_id64"`
 
+	// dedicated servers
+	SteamAccountToken string `json:"steam_account_token"`
+	ServerWrapper     string `json:"server_wrapper"`
+
 	// folders
 	DataDir      string `json:"data_dir"`
 	DownloadsDir string `json:"downloads_dir"`
@@ -85,7 +90,8 @@ func defaults() *Config {
 	}
 
 	return &Config{
-		Backend:       BackendSteamCMD,
+		Backend:       BackendSteamworks,
+		ServerWrapper: defaultServerWrapper(),
 		DataDir:       filepath.Join(home, "gworx"),
 		AutoExtract:   true,
 		DefaultAuthor: author,
@@ -109,8 +115,8 @@ func Load() (*Config, error) {
 		return cfg, err
 	}
 
-	if cfg.Backend != BackendSteamworks {
-		cfg.Backend = BackendSteamCMD
+	if cfg.Backend != BackendSteamCMD && cfg.Backend != BackendSteamworks {
+		cfg.Backend = BackendSteamworks
 	}
 
 	if cfg.DataDir == "" {
@@ -139,6 +145,65 @@ func (c *Config) Save() error {
 	}
 
 	return os.Rename(tmp, c.path)
+}
+
+// Reload replaces settings with the on-disk config, keeping the same Config pointer.
+func (c *Config) Reload() error {
+	c.mu.Lock()
+	path := c.path
+	c.mu.Unlock()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	fresh := defaults()
+	if err := json.Unmarshal(data, fresh); err != nil {
+		return err
+	}
+	if fresh.Backend != BackendSteamCMD && fresh.Backend != BackendSteamworks {
+		fresh.Backend = BackendSteamworks
+	}
+	if fresh.DataDir == "" {
+		fresh.DataDir = defaults().DataDir
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.Backend = fresh.Backend
+	c.SteamCMDPath = fresh.SteamCMDPath
+	c.SteamUsername = fresh.SteamUsername
+	c.AnonymousDownloads = fresh.AnonymousDownloads
+	c.SteamCMDInstallDir = fresh.SteamCMDInstallDir
+	c.SteamAPIPath = fresh.SteamAPIPath
+	c.WebAPIKey = fresh.WebAPIKey
+	c.SteamID64 = fresh.SteamID64
+	c.SteamAccountToken = fresh.SteamAccountToken
+	c.ServerWrapper = fresh.ServerWrapper
+	c.DataDir = fresh.DataDir
+	c.DownloadsDir = fresh.DownloadsDir
+	c.UploadsDir = fresh.UploadsDir
+	c.AutoExtract = fresh.AutoExtract
+	c.DefaultAuthor = fresh.DefaultAuthor
+	c.DefaultIgnore = append([]string(nil), fresh.DefaultIgnore...)
+	return nil
+}
+
+// defaultServerWrapper runs srcds through steam-run on NixOS, where the
+// server's prebuilt binaries can't find their libraries otherwise.
+func defaultServerWrapper() string {
+	if _, err := os.Stat("/etc/NIXOS"); err != nil {
+		return ""
+	}
+	if _, err := exec.LookPath("steam-run"); err != nil {
+		return ""
+	}
+	return "steam-run"
+}
+
+// Servers returns the default parent folder for dedicated server instances.
+func (c *Config) Servers() string {
+	return filepath.Join(c.DataDir, "servers")
 }
 
 // Downloads returns the folder raw GMA files from the Workshop are stored in.

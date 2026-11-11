@@ -23,10 +23,7 @@ var runGUI = func() error {
 	gui := ui.New(a, w, cfg, st)
 	w.SetContent(gui.Content())
 	w.Resize(fyne.NewSize(1000, 720))
-	w.SetCloseIntercept(func() {
-		gui.Shutdown()
-		w.Close()
-	})
+	w.SetCloseIntercept(gui.RequestClose)
 
 	for _, err := range []error{cfgErr, stErr} {
 		if err != nil {

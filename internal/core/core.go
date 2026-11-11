@@ -14,6 +14,7 @@ import (
 
 	"github.com/Pika-Software/gworx/internal/config"
 	"github.com/Pika-Software/gworx/internal/gmaops"
+	"github.com/Pika-Software/gworx/internal/server"
 	"github.com/Pika-Software/gworx/internal/store"
 	"github.com/Pika-Software/gworx/internal/workshop"
 )
@@ -40,19 +41,26 @@ func (r Reporter) logger() workshop.Logger       { return r.log }
 func (r Reporter) progresser() workshop.Progress { return r.progress }
 
 type Service struct {
-	Cfg    *config.Config
-	Store  *store.Store
-	SW     *workshop.Steamworks
-	Prompt workshop.Prompter
+	Cfg     *config.Config
+	Store   *store.Store
+	SW      *workshop.Steamworks
+	Prompt  workshop.Prompter
+	Servers *server.Manager
+	// ServersErr is set when servers.json could not be read.
+	ServersErr error
 }
 
 func New(cfg *config.Config, st *store.Store, prompt workshop.Prompter) *Service {
-	return &Service{
+	s := &Service{
 		Cfg:    cfg,
 		Store:  st,
-		SW:     &workshop.Steamworks{LibPath: cfg.SteamAPIPath},
+		SW:     &workshop.Steamworks{LibPath: cfg.SteamAPIPath, StagingDir: filepath.Join(cfg.DataDir, "staging")},
 		Prompt: prompt,
 	}
+	s.Servers, s.ServersErr = server.Open(config.Dir(), func() server.Settings {
+		return server.Settings{SteamCMD: s.SteamCMD(), Token: s.Cfg.SteamAccountToken, Wrapper: s.Cfg.ServerWrapper}
+	})
+	return s
 }
 
 // Close releases the Steam API if it was used.
@@ -74,6 +82,7 @@ func (s *Service) SteamCMD() *workshop.SteamCMD {
 		Path:       s.Cfg.SteamCMDPath,
 		User:       s.Cfg.SteamUsername,
 		InstallDir: s.Cfg.SteamCMDDir(),
+		Wrapper:    s.Cfg.ServerWrapper,
 		Anonymous:  s.Cfg.AnonymousDownloads,
 		Prompt:     s.Prompt,
 	}

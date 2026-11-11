@@ -461,3 +461,36 @@ func SaveAddonJSON(p *Project) error {
 	}
 	return os.WriteFile(filepath.Join(p.SourceDir, "addon.json"), raw, 0o644)
 }
+
+// VerifyResult reports the CRC check of every file in a GMA.
+type VerifyResult struct {
+	// OK[i] is false when file i's data doesn't match its stored CRC32.
+	// Files without a stored checksum (0) count as OK.
+	OK  []bool
+	Bad int
+}
+
+// Verify checks the CRC32 of every file in the GMA.
+func Verify(p string, progress func(done, total int)) (*VerifyResult, error) {
+	addon, cleanup, err := open(p)
+	defer cleanup()
+	if err != nil {
+		return nil, err
+	}
+
+	res := &VerifyResult{OK: make([]bool, len(addon.Files))}
+	for i := range addon.Files {
+		ok, err := addon.Files[i].IsValid()
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", addon.Files[i].Path, err)
+		}
+		res.OK[i] = ok
+		if !ok {
+			res.Bad++
+		}
+		if progress != nil {
+			progress(i+1, len(addon.Files))
+		}
+	}
+	return res, nil
+}

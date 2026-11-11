@@ -2,7 +2,7 @@ name: Build
 
 on:
   push:
-    branches: [main]
+    # branches: [main]
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
@@ -62,6 +62,7 @@ jobs:
           ext=""; [ "$GOOS" = windows ] && ext=".exe"
           mkdir -p "dist/$name"
           go build -tags nogui -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o "dist/$name/gworx-cli$ext" .
+          .github/steam-api.sh "$GOOS" "$GOARCH" "dist/$name"
           cp README.md LICENSE "dist/$name/"
           cd dist
           if [ "$GOOS" = windows ]; then zip -qr "$name.zip" "$name"; else tar -czf "$name.tar.gz" "$name"; fi
@@ -109,6 +110,7 @@ jobs:
           fi
           mkdir -p "dist/$name"
           go build -trimpath -ldflags "$ldflags" -o "dist/$name/gworx$ext" .
+          .github/steam-api.sh "${{ matrix.goos }}" "${{ matrix.goarch }}" "dist/$name"
           cp README.md LICENSE "dist/$name/"
           cd dist
           if [ "${{ matrix.goos }}" = windows ]; then
@@ -131,7 +133,7 @@ jobs:
       - uses: cachix/install-nix-action@v31
       - run: nix flake check
       - name: Build packages
-        run: nix build .#gworx .#gworx-cli --print-build-logs
+        run: nix build .#gworx .#gworx-cli .#gworx-steamworks --print-build-logs
       - name: Check flake version matches the tag
         if: startsWith(github.ref, 'refs/tags/v')
         run: |

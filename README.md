@@ -19,11 +19,19 @@ line. GMA files are read and written with
     them. "Refresh from Steam" imports items you published before.
   - **History**: every addon you downloaded with GWorX.
 - **GMA Tools**
+  - **Extract**: drop a `.gma` (or a legacy `.bin`) onto the window. You see a
+    numbered list of its files and the addon's details (title, author,
+    version, required content, sizes). **Verify checksums** marks each file
+    as OK or damaged, and **Extract** unpacks the addon into a folder.
   - **Build**: set the title, description, author, addon version, type, tags,
     required content (Workshop IDs), addon folder and ignore wildcards
-    (`*.txt`, `.git`, `app.exe`, ...). Reads and writes `addon.json`.
-  - **Extract**: look inside a GMA and unpack it into a folder.
-- **Command line**: everything above also works without the GUI.
+    (`*.txt`, `.git`, `app.exe`, ...). Reads and writes `addon.json`. You can
+    also drop an addon folder onto the window.
+- **Dedicated Server**: install and run Garry's Mod dedicated servers with
+  steamcmd. Each server has its own name and folder, a live console with a
+  command line, Start/Stop/Restart, a branch selector, and its gamemode,
+  level, max players, port, tickrate and `developer` value.
+- **Command line**: the Workshop and GMA features also work without the GUI.
 
 ## Installation
 
@@ -32,7 +40,7 @@ line. GMA files are read and written with
 | Linux       | `gworx-<ver>-linux-amd64.tar.gz`          | `gworx-cli-<ver>-linux-{amd64,arm64}.tar.gz`  |
 | Windows     | `gworx-<ver>-windows-amd64.zip`           | `gworx-cli-<ver>-windows-{amd64,arm64}.zip`   |
 | macOS       | `gworx-<ver>-darwin-{arm64,amd64}.tar.gz` | `gworx-cli-<ver>-darwin-{arm64,amd64}.tar.gz` |
-| NixOS / Nix | `packages.default`                        | `packages.gworx-cli`                          |
+| NixOS / Nix | `packages.default`, `packages.gworx-steamworks` | `packages.gworx-cli`                    |
 
 All archives are on the [Releases](https://github.com/Pika-Software/gworx/releases)
 page. Each release has a `SHA256SUMS` file you can check the downloads against:
@@ -43,6 +51,11 @@ sha256sum -c SHA256SUMS --ignore-missing
 
 The `gworx-cli` builds have no GUI and depend on no system libraries, so they
 work on headless servers and in CI.
+
+Every archive except Windows arm64 also contains Valve's Steam API library
+(`libsteam_api.so`, `steam_api64.dll` or `libsteam_api.dylib`) for the
+[Steamworks backend](#workshop-backends). Keep it in the same folder as the
+binary.
 
 You also need a Workshop backend. See [Workshop backends](#workshop-backends).
 
@@ -103,9 +116,16 @@ nix run github:Pika-Software/gworx#cli -- help  # CLI only
 Install into your profile:
 
 ```sh
-nix profile install github:Pika-Software/gworx            # GUI + CLI
-nix profile install github:Pika-Software/gworx#gworx-cli  # CLI only
+nix profile install github:Pika-Software/gworx                   # GUI + CLI
+nix profile install github:Pika-Software/gworx#gworx-steamworks  # GUI + CLI + Steam API
+nix profile install github:Pika-Software/gworx#gworx-cli         # CLI only
 ```
+
+| Package | Contents |
+|---|---|
+| `gworx` (default) | GUI + CLI. The Steamworks backend uses Garry's Mod's library or a path you set. |
+| `gworx-steamworks` | The same plus Valve's Steam API in `lib/gworx`. Unfree (redistributable). The flake allows it for this package only. |
+| `gworx-cli` | CLI only. |
 
 #### flake.nix (NixOS)
 
@@ -128,8 +148,11 @@ home.packages = [ inputs.gworx.packages.${pkgs.stdenv.hostPlatform.system}.defau
 
 ```nix
 nixpkgs.overlays = [ inputs.gworx.overlays.default ];
-environment.systemPackages = [ pkgs.gworx ];  # or pkgs.gworx-cli
+environment.systemPackages = [ pkgs.gworx ];  # or pkgs.gworx-cli / pkgs.gworx-steamworks
 ```
+
+Through the overlay, `gworx-steamworks` follows your own nixpkgs config, so it
+needs `allowUnfree` (or an `allowUnfreePredicate` that allows it).
 
 The flake supports `x86_64-linux` and `aarch64-linux`. steamcmd is unfree, so
 the flake doesn't include it. To use steamcmd, add it yourself:
@@ -178,8 +201,9 @@ Set it up once:
    Type your password and Steam Guard code, or confirm the login in the Steam
    mobile app. You only need to log in to upload. Downloads work anonymously
    if you tick "Download anonymously".
-3. **Steamworks**: start the Steam client, then click **Detect** (or pick
-   `libsteam_api` yourself) and **Test connection**.
+3. **Steamworks**: start the Steam client and click **Test connection**.
+   Release builds use the Steam API library next to the binary. Leave the path
+   empty unless you want to use a different one.
 4. Optional: change the data folders, the default author, and the default
    ignore list.
 5. Click **Save**.
@@ -193,8 +217,15 @@ Common tasks:
   **Upload**.
 - **Update an addon**: go to **My Addons**, select it and click **Update…**. The
   form fills in from the last upload and the addon version goes up by one.
-- **Pack or unpack a GMA**: use **GMA Tools → Build** or **GMA Tools →
+- **Unpack a GMA**: drop it anywhere on the window. It opens in **GMA Tools →
   Extract**.
+- **Pack a GMA**: drop the addon folder onto the window, or use **GMA Tools →
+  Build**.
+
+File and folder pickers use your system's dialog: the desktop portal on
+Linux (GNOME, KDE, ...), or `zenity`/`kdialog` when there's no portal, and the
+native dialogs on Windows and macOS. If none is available, GWorX uses its
+built-in dialog.
 
 The **Log** tab shows full output, including everything steamcmd prints.
 
@@ -252,6 +283,47 @@ id=$(gworx upload -q -id 123456789 ./my_addon)
 gma=$(gworx download -q -no-extract 104603291)
 ```
 
+### Dedicated servers
+
+Open the **Dedicated Server** tab and click **New server…**:
+
+1. Give the server a name and a location folder (default:
+   `~/gworx/servers/<name>`). To manage a server you already have, pick its
+   folder instead.
+2. Choose a branch. `x86-64` is the 64-bit server; `public`, `prerelease` and
+   `dev` are also available, or type another branch name.
+3. Confirm the install. steamcmd downloads app 4020 (a few GB) into the
+   folder, and its output appears in the console.
+
+Each server's page has:
+
+- **Start / Stop / Restart**: Stop sends `quit` and waits up to 20 seconds,
+  then terminates the server.
+- **Install / Update**: runs steamcmd again. Tick **Validate files** to check
+  every file. Run it after changing the branch.
+- **Open folder**: opens the server's location.
+- **Settings**: branch, gamemode, level, max players, port, tickrate,
+  `developer` (0/1/2) and extra arguments. **Startup command** shows the exact
+  command line. Changes are saved when you start or restart the server.
+- **Console**: live server output. Type a command and press Enter (or
+  **Send**).
+
+Global settings live in **Settings → Dedicated servers**:
+
+- **Steam Account Token**: a
+  [game server login token](https://steamcommunity.com/dev/managegameservers)
+  for app 4000. When set, every server starts with
+  `+sv_setsteamaccount <token>`. The startup command preview hides it. Without
+  a token the server runs anonymously and ranks lower in the server browser.
+- **Launch wrapper**: a command put in front of `srcds_run`. It defaults to
+  `steam-run` on NixOS, because Valve's server binaries can't find their
+  libraries there otherwise.
+
+Two servers can't run on the same port at once. When you quit GWorX while
+servers are running, it asks first and then stops them. On Windows,
+`srcds.exe` writes most of its output to its own console window, so the
+GWorX console shows less there.
+
 ### Files
 
 | What                                               | Where                                                                                           |
@@ -260,6 +332,7 @@ gma=$(gworx download -q -no-extract 104603291)
 | Downloaded GMAs                                    | `~/gworx/downloads`                                                                             |
 | Extracted addons                                   | `~/gworx/uploads`                                                                               |
 | Built GMAs                                         | `~/gworx/builds`                                                                                |
+| Dedicated servers (default location)               | `~/gworx/servers/<name>` (list in `servers.json` next to the config)                          |
 | steamcmd workshop cache                            | `~/gworx/steamcmd`                                                                              |
 
 You can change the folders in **Settings** or with `gworx config set data_dir …`.
@@ -268,7 +341,7 @@ You can change the folders in **Settings** or with `gworx config set data_dir �
 
 |               | steamcmd                                                      | Steamworks                                                                           |
 | ------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| Needs         | [steamcmd](https://developer.valvesoftware.com/wiki/SteamCMD) | Steam client running and logged in, an account that owns GMod, 64-bit `libsteam_api` |
+| Needs         | [steamcmd](https://developer.valvesoftware.com/wiki/SteamCMD) | Steam client running and logged in, an account that owns GMod (Steam API library is bundled) |
 | Download      | anonymous or with your account                                | Garry's Mod must be installed in that Steam client                                   |
 | Upload        | yes                                                           | yes, also sets Workshop tags                                                         |
 | List my items | only with a Steam Web API key + SteamID64                     | yes                                                                                  |
@@ -282,12 +355,23 @@ You can change the folders in **Settings** or with `gworx config set data_dir �
 - **Finding steamcmd:** GWorX looks for it on your `PATH`. You can also set the
   path yourself.
 
-**Steamworks**:
+**Steamworks** works the same way as
+[nwmpublisher](https://github.com/DeisDev/nwmpublisher):
 
-- **Library:** Garry's Mod ships the library GWorX needs, in `bin/linux64/` or
-  `bin/win64/`, and GWorX finds it automatically. On Linux this is only there
-  if Garry's Mod uses the x86-64 beta branch.
-- **While connected:** Steam shows you as playing Garry's Mod.
+- **Library:** GWorX ships Valve's redistributable Steam API next to the
+  binary (see [`third_party/steamworks`](third_party/steamworks)). It loads the
+  library at runtime, so building GWorX needs neither the SDK nor cgo. GWorX
+  looks for it in this order:
+  1. the path set in Settings (`steam_api_path`);
+  2. next to the `gworx` binary;
+  3. `../lib/gworx/` relative to the binary (Linux packages, Nix);
+  4. a Garry's Mod install (`bin/win64`, or `bin/linux64` on the x86-64 branch).
+- **Connecting:** GWorX starts as Garry's Mod (app 4000). If Steam isn't ready
+  yet, it retries for up to a minute.
+- **Downloads:** Steam downloads the item into its own Workshop folder.
+  GWorX stops a download that makes no progress for 2 minutes.
+- **While connected:** your friends list shows you in Garry's Mod, "In the
+  Workshop".
 
 ## Releasing
 
@@ -322,4 +406,6 @@ Code layout:
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE). The Steam API binaries in `third_party/steamworks` belong to
+Valve Corporation and are redistributed under the Steamworks SDK Access
+Agreement.

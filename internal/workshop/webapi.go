@@ -199,3 +199,37 @@ func FetchBytes(ctx context.Context, u string, limit int64) ([]byte, error) {
 	}
 	return io.ReadAll(io.LimitReader(resp.Body, limit))
 }
+
+// GetPreviewURLs returns the preview image URL of every public item among ids.
+// Items that are private, removed or have no preview are left out.
+func GetPreviewURLs(ctx context.Context, ids ...uint64) (map[uint64]string, error) {
+	out := map[uint64]string{}
+	for len(ids) > 0 {
+		batch := ids[:min(len(ids), 100)]
+		ids = ids[len(batch):]
+
+		form := url.Values{}
+		form.Set("itemcount", strconv.Itoa(len(batch)))
+		for i, id := range batch {
+			form.Set(fmt.Sprintf("publishedfileids[%d]", i), strconv.FormatUint(id, 10))
+		}
+
+		var resp struct {
+			Response struct {
+				Details []apiDetails `json:"publishedfiledetails"`
+			} `json:"response"`
+		}
+		if err := apiCall(ctx, http.MethodPost, "https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/", form, &resp); err != nil {
+			return out, err
+		}
+		for _, d := range resp.Response.Details {
+			if d.Result != 1 || d.PreviewURL == "" {
+				continue
+			}
+			if id, err := strconv.ParseUint(d.PublishedFileID, 10, 64); err == nil {
+				out[id] = d.PreviewURL
+			}
+		}
+	}
+	return out, nil
+}

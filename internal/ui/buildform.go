@@ -322,8 +322,6 @@ func (a *App) buildTask(t *task, p *gmaops.Project, out string) error {
 	return err
 }
 
-// --- Build page -------------------------------------------------------------
-
 type buildPage struct {
 	a    *App
 	form *buildForm

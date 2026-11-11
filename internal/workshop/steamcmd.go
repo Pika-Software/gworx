@@ -23,6 +23,8 @@ type SteamCMD struct {
 	Path       string
 	User       string
 	InstallDir string
+	// Wrapper is prepended to the steamcmd command (e.g. "steam-run" on NixOS).
+	Wrapper string
 	// Anonymous forces anonymous logins for downloads.
 	Anonymous bool
 	Prompt    Prompter
@@ -33,23 +35,29 @@ type SteamCMD struct {
 func (s *SteamCMD) Name() string        { return "steamcmd" }
 func (s *SteamCMD) CurrentUser() string { return s.User }
 
-// FindSteamCMD looks for steamcmd in PATH and common install locations.
-func FindSteamCMD() string {
+// FindSteamCMD looks for steamcmd in PATH, optional extra dirs, and common install locations.
+func FindSteamCMD(extraDirs ...string) string {
 	for _, name := range []string{"steamcmd", "steamcmd.sh", "steamcmd.exe"} {
 		if p, err := exec.LookPath(name); err == nil {
 			return p
 		}
 	}
+	for _, dir := range extraDirs {
+		if p := SteamCMDInDir(dir); p != "" {
+			return p
+		}
+	}
 
 	home, _ := os.UserHomeDir()
-	for _, p := range []string{
-		filepath.Join(home, "steamcmd", "steamcmd.sh"),
-		filepath.Join(home, ".steam", "steamcmd", "steamcmd.sh"),
-		filepath.Join(home, ".local", "share", "Steam", "steamcmd", "steamcmd.sh"),
-		`C:\steamcmd\steamcmd.exe`,
-		`C:\Program Files\steamcmd\steamcmd.exe`,
+	for _, dir := range []string{
+		filepath.Join(home, "gworx", "steamcmd"),
+		filepath.Join(home, "steamcmd"),
+		filepath.Join(home, ".steam", "steamcmd"),
+		filepath.Join(home, ".local", "share", "Steam", "steamcmd"),
+		`C:\steamcmd`,
+		`C:\Program Files\steamcmd`,
 	} {
-		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+		if p := SteamCMDInDir(dir); p != "" {
 			return p
 		}
 	}
@@ -60,10 +68,13 @@ func (s *SteamCMD) exe() (string, error) {
 	if s.Path != "" {
 		return s.Path, nil
 	}
+	if p := SteamCMDInDir(s.InstallDir); p != "" {
+		return p, nil
+	}
 	if p := FindSteamCMD(); p != "" {
 		return p, nil
 	}
-	return "", errors.New("steamcmd not found: install it or set its path in Settings")
+	return "", errors.New("steamcmd not found: use Download in Settings, install it, or set its path")
 }
 
 var (
@@ -125,9 +136,17 @@ func (s *SteamCMD) run(ctx context.Context, log Logger, login string, cmds ...st
 		}
 		shown = append(shown, a)
 	}
-	log("$ steamcmd " + strings.Join(shown, " "))
+	prog, progArgs, err := wrapCommand(s.Wrapper, exe, args...)
+	if err != nil {
+		return nil, err
+	}
+	if w := strings.TrimSpace(s.Wrapper); w != "" {
+		log("$ " + w + " steamcmd " + strings.Join(shown, " "))
+	} else {
+		log("$ steamcmd " + strings.Join(shown, " "))
+	}
 
-	cmd := exec.CommandContext(ctx, exe, args...)
+	cmd := exec.CommandContext(ctx, prog, progArgs...)
 	cmd.Env = append(os.Environ(), "TERM=dumb")
 
 	term, err := startInteractive(cmd)
@@ -475,4 +494,55 @@ func (s *SteamCMD) Delete(ctx context.Context, id uint64, log Logger) error {
 
 func (s *SteamCMD) ListPublished(ctx context.Context, log Logger) ([]Item, error) {
 	return nil, ErrNotSupported
+}
+
+var (
+	appProgressRe = regexp.MustCompile(`progress: (\d+(?:\.\d+)?)`)
+	appSuccessRe  = regexp.MustCompile(`Success! App '(\d+)' (fully installed|already up to date)`)
+)
+
+// AppUpdate installs or updates a Steam app (e.g. a dedicated server) into dir
+// with an anonymous login. An empty branch keeps steamcmd's default (public).
+func (s *SteamCMD) AppUpdate(ctx context.Context, dir string, appID int, branch string, validate bool, log Logger, progress Progress) error {
+	if log == nil {
+		log = nopLog
+	}
+	if progress == nil {
+		progress = nopProgress
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return err
+	}
+
+	c := &SteamCMD{Path: s.Path, InstallDir: abs, Wrapper: s.Wrapper, Prompt: s.Prompt}
+
+	cmds := []string{"+app_update", strconv.Itoa(appID)}
+	if branch != "" {
+		cmds = append(cmds, "-beta", branch)
+	}
+	if validate {
+		cmds = append(cmds, "validate")
+	}
+
+	progress(-1)
+	out, err := c.run(ctx, func(line string) {
+		log(line)
+		if m := appProgressRe.FindStringSubmatch(line); m != nil {
+			if f, err := strconv.ParseFloat(m[1], 64); err == nil {
+				progress(f / 100)
+			}
+		}
+	}, "anonymous", cmds...)
+	if out != nil && out.has(appSuccessRe) != nil {
+		progress(1)
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if len(out.errors) > 0 {
+		return errors.New(out.errors[len(out.errors)-1])
+	}
+	return fmt.Errorf("steamcmd did not report a successful install of app %d, see the console", appID)
 }

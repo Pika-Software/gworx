@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/theme"
@@ -24,6 +25,9 @@ type minePage struct {
 	selected int
 	list     *widget.List
 	details  *widget.Label
+	image    *canvas.Image
+	imageBox *fyne.Container
+	scroll   *container.Scroll
 	actions  *fyne.Container
 }
 
@@ -38,11 +42,13 @@ func newMinePage(a *App) *minePage {
 			title.Truncation = fyne.TextTruncateEllipsis
 			sub := widget.NewLabel("")
 			sub.Truncation = fyne.TextTruncateEllipsis
-			return container.NewVBox(title, sub)
+			return container.NewBorder(nil, nil, newThumb(56), nil, container.NewVBox(title, sub))
 		},
 		func(i widget.ListItemID, o fyne.CanvasObject) {
 			it := m.items[i]
-			box := o.(*fyne.Container)
+			row := o.(*fyne.Container)
+			box := row.Objects[0].(*fyne.Container)
+			setThumb(row.Objects[1].(*canvas.Image), m.preview(it))
 			box.Objects[0].(*widget.Label).SetText(it.Title)
 			sub := fmt.Sprintf("%d", it.ID)
 			if !it.UpdatedAt.IsZero() {
@@ -61,9 +67,39 @@ func newMinePage(a *App) *minePage {
 	}
 
 	m.details = wrapLabel("")
+	m.image = newThumb(192)
+	m.image.Hide()
+	m.imageBox = container.NewHBox(m.image)
+	m.scroll = container.NewVScroll(container.NewVBox(m.imageBox, m.details))
 	m.actions = container.NewHBox()
+	a.previews.subscribe(func() {
+		m.list.Refresh()
+		m.showImage()
+	})
 	m.reload()
 	return m
+}
+
+// preview prefers the local preview image used for the last upload.
+func (m *minePage) preview(it store.Published) fyne.Resource {
+	if it.PreviewPath != "" {
+		if r := m.a.previews.file(it.PreviewPath); r != nil {
+			return r
+		}
+	}
+	return m.a.previews.workshop(it.ID)
+}
+
+func (m *minePage) showImage() {
+	it, ok := m.current()
+	if !ok {
+		m.image.Hide()
+		m.scroll.Refresh()
+		return
+	}
+	setThumb(m.image, m.preview(it))
+	m.image.Show()
+	m.scroll.Refresh()
 }
 
 func (m *minePage) current() (store.Published, bool) {
@@ -94,6 +130,7 @@ func (m *minePage) reload() {
 }
 
 func (m *minePage) showDetails() {
+	m.showImage()
 	it, ok := m.current()
 	if !ok {
 		m.details.SetText("Addons you upload with GWorX appear here. Use \"Refresh from Steam\" to import the ones you published before.")
@@ -206,7 +243,8 @@ func (m *minePage) object() fyne.CanvasObject {
 		}),
 	)
 
-	right := container.NewBorder(nil, container.NewHScroll(m.actions), nil, nil, container.NewVScroll(m.details))
+	right := insetSides(container.NewBorder(nil, container.NewHScroll(m.actions), nil, nil,
+		greyPanel(m.scroll)))
 	split := container.NewHSplit(m.list, right)
 	split.Offset = 0.4
 

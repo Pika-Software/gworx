@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/theme"
@@ -25,6 +26,9 @@ type historyPage struct {
 	selected int
 	list     *widget.List
 	details  *widget.Label
+	image    *canvas.Image
+	imageBox *fyne.Container
+	scroll   *container.Scroll
 	actions  *fyne.Container
 }
 
@@ -39,11 +43,13 @@ func newHistoryPage(a *App) *historyPage {
 			title.Truncation = fyne.TextTruncateEllipsis
 			sub := widget.NewLabel("")
 			sub.Truncation = fyne.TextTruncateEllipsis
-			return container.NewVBox(title, sub)
+			return container.NewBorder(nil, nil, newThumb(56), nil, container.NewVBox(title, sub))
 		},
 		func(i widget.ListItemID, o fyne.CanvasObject) {
 			it := h.items[i]
-			box := o.(*fyne.Container)
+			row := o.(*fyne.Container)
+			box := row.Objects[0].(*fyne.Container)
+			setThumb(row.Objects[1].(*canvas.Image), h.a.previews.workshop(it.ID))
 			title := it.Title
 			if title == "" {
 				title = fmt.Sprintf("Item %d", it.ID)
@@ -62,6 +68,14 @@ func newHistoryPage(a *App) *historyPage {
 	}
 
 	h.details = wrapLabel("")
+	h.image = newThumb(192)
+	h.image.Hide()
+	h.imageBox = container.NewHBox(h.image)
+	h.scroll = container.NewVScroll(container.NewVBox(h.imageBox, h.details))
+	a.previews.subscribe(func() {
+		h.list.Refresh()
+		h.showImage()
+	})
 	h.actions = container.NewHBox()
 	h.reload()
 	return h
@@ -102,7 +116,20 @@ func exists(p string) bool {
 	return err == nil
 }
 
+func (h *historyPage) showImage() {
+	it, ok := h.current()
+	if !ok {
+		h.image.Hide()
+		h.scroll.Refresh()
+		return
+	}
+	setThumb(h.image, h.a.previews.workshop(it.ID))
+	h.image.Show()
+	h.scroll.Refresh()
+}
+
 func (h *historyPage) showDetails() {
+	h.showImage()
 	it, ok := h.current()
 	if !ok {
 		h.details.SetText("Addons downloaded from the Workshop appear here.")
@@ -140,7 +167,7 @@ func (h *historyPage) showDetails() {
 					dest = filepath.Join(h.a.cfg.Uploads(), fmt.Sprintf("%d_%s", it.ID, slug(it.Title)))
 				}
 				h.a.extract.setGMA(it.GMAPath, dest)
-				h.a.showToolsTab(1)
+				h.a.showToolsTab(0)
 			}),
 		)
 	}
@@ -195,7 +222,8 @@ func (h *historyPage) object() fyne.CanvasObject {
 		}),
 	)
 
-	right := container.NewBorder(nil, container.NewHScroll(h.actions), nil, nil, container.NewVScroll(h.details))
+	right := insetSides(container.NewBorder(nil, container.NewHScroll(h.actions), nil, nil,
+		greyPanel(h.scroll)))
 	split := container.NewHSplit(h.list, right)
 	split.Offset = 0.4
 

@@ -46,6 +46,9 @@ type settingsPage struct {
 	webKey    *widget.Entry
 	steamID64 *widget.Entry
 
+	serverToken   *widget.Entry
+	serverWrapper *widget.Entry
+
 	steamcmdCard   *widget.Card
 	steamworksCard *widget.Card
 }
@@ -67,8 +70,11 @@ func newSettingsPage(a *App) *settingsPage {
 	s.ignore.SetMinRowsVisible(5)
 	s.webKey = widget.NewPasswordEntry()
 	s.steamID64 = widget.NewEntry()
+	s.serverToken = widget.NewPasswordEntry()
+	s.serverWrapper = widget.NewEntry()
+	s.serverWrapper.SetPlaceHolder("none (e.g. steam-run on NixOS)")
 
-	s.backend = widget.NewRadioGroup([]string{backendLabelSteamCMD, backendLabelSteamworks}, func(string) { s.updateCards() })
+	s.backend = widget.NewRadioGroup([]string{backendLabelSteamworks, backendLabelSteamCMD}, func(string) { s.updateCards() })
 	s.backend.Horizontal = true
 	s.backend.Required = true
 
@@ -85,7 +91,7 @@ func (s *settingsPage) load() {
 	}
 
 	s.steamcmdPath.SetText(cfg.SteamCMDPath)
-	s.steamcmdPath.SetPlaceHolder("Auto: " + orNone(workshop.FindSteamCMD()))
+	s.steamcmdPath.SetPlaceHolder("Auto: " + orNone(workshop.FindSteamCMD(filepath.Join(cfg.DataDir, "steamcmd"))))
 	s.username.SetText(cfg.SteamUsername)
 	s.anonymous.SetChecked(cfg.AnonymousDownloads)
 	s.installDir.SetText(cfg.SteamCMDInstallDir)
@@ -95,7 +101,7 @@ func (s *settingsPage) load() {
 	if found := workshop.FindSteamAPI(); len(found) > 0 {
 		s.steamAPIPath.SetPlaceHolder("Auto: " + found[0])
 	} else {
-		s.steamAPIPath.SetPlaceHolder("Garry's Mod not found, select libsteam_api manually")
+		s.steamAPIPath.SetPlaceHolder("Not found: release builds ship it next to gworx; or select libsteam_api manually")
 	}
 
 	s.dataDir.SetText(cfg.DataDir)
@@ -109,7 +115,24 @@ func (s *settingsPage) load() {
 	s.ignore.SetText(strings.Join(cfg.DefaultIgnore, "\n"))
 
 	s.webKey.SetText(cfg.WebAPIKey)
+	s.serverToken.SetText(cfg.SteamAccountToken)
+	s.serverWrapper.SetText(cfg.ServerWrapper)
 	s.steamID64.SetText(cfg.SteamID64)
+
+	s.updateCards()
+}
+
+func (s *settingsPage) revert() {
+	if err := s.a.cfg.Reload(); err != nil {
+		s.a.showError(err)
+		return
+	}
+	s.load()
+	s.a.download.extract.SetChecked(s.a.cfg.AutoExtract)
+	s.a.upload.refreshBackendLabel()
+	if v := s.a.servers.view; v != nil {
+		v.preview()
+	}
 }
 
 func orNone(s string) string {
@@ -165,6 +188,8 @@ func (s *settingsPage) apply() error {
 	cfg.DefaultIgnore = splitLines(s.ignore.Text)
 
 	cfg.WebAPIKey = strings.TrimSpace(s.webKey.Text)
+	cfg.SteamAccountToken = strings.TrimSpace(s.serverToken.Text)
+	cfg.ServerWrapper = strings.TrimSpace(s.serverWrapper.Text)
 	cfg.SteamID64 = strings.TrimSpace(s.steamID64.Text)
 
 	if err := cfg.Save(); err != nil {
@@ -173,6 +198,9 @@ func (s *settingsPage) apply() error {
 
 	s.a.download.extract.SetChecked(cfg.AutoExtract)
 	s.a.upload.refreshBackendLabel()
+	if v := s.a.servers.view; v != nil {
+		v.preview()
+	}
 	return nil
 }
 
@@ -186,11 +214,18 @@ func (s *settingsPage) save() {
 }
 
 func (s *settingsPage) login() {
-	if err := s.apply(); err != nil {
-		s.a.showError(err)
+	user := strings.TrimSpace(s.username.Text)
+	if user == "" {
+		s.a.showError(errors.New("set your Steam username first"))
 		return
 	}
-	cmd := s.a.svc.SteamCMD()
+	cmd := &workshop.SteamCMD{
+		Path:       strings.TrimSpace(s.steamcmdPath.Text),
+		User:       user,
+		InstallDir: s.a.cfg.SteamCMDDir(),
+		Wrapper:    strings.TrimSpace(s.serverWrapper.Text),
+		Prompt:     s.a.svc.Prompt,
+	}
 	s.a.runTask("steamcmd login", func(t *task) error {
 		t.log("Logging in as " + cmd.User + ". If Steam Guard uses the mobile app, confirm the login on your phone.")
 		return cmd.Login(t.ctx, t.log)
@@ -200,13 +235,9 @@ func (s *settingsPage) login() {
 }
 
 func (s *settingsPage) testSteamworks() {
-	if err := s.apply(); err != nil {
-		s.a.showError(err)
-		return
-	}
 	sw := s.a.svc.SW
 	if !sw.Initialized() {
-		sw.LibPath = s.a.cfg.SteamAPIPath
+		sw.LibPath = strings.TrimSpace(s.steamAPIPath.Text)
 	}
 	s.a.runTask("Connect to Steam", func(t *task) error {
 		ctx, cancel := context.WithTimeout(t.ctx, time.Minute)
@@ -215,18 +246,18 @@ func (s *settingsPage) testSteamworks() {
 		if err != nil {
 			return err
 		}
-		t.log("Connected as " + sw.CurrentUser())
+		t.log("Connected as " + sw.CurrentUser() + " using " + sw.Library())
 		t.log("Published Garry's Mod items: " + strconv.Itoa(len(items)))
 		return nil
 	}, func() {
-		dialog.ShowInformation("Steamworks", "Connected to Steam as "+sw.CurrentUser()+".", s.a.win)
+		dialog.ShowInformation("Steamworks", "Connected to Steam as "+sw.CurrentUser()+".\nLibrary: "+sw.Library(), s.a.win)
 	})
 }
 
 func (s *settingsPage) detectSteamAPI() {
 	found := workshop.FindSteamAPI()
 	if len(found) == 0 {
-		dialog.ShowInformation("Not found", "No Garry's Mod installation with a 64-bit steam_api library was found. On Linux, switch Garry's Mod to the x86-64 beta branch, or pick the library manually.", s.a.win)
+		dialog.ShowInformation("Not found", "No steam_api library was found. Release builds ship it next to the gworx binary; Garry's Mod also has one (bin/win64, or bin/linux64 on the x86-64 branch). You can also pick it manually.", s.a.win)
 		return
 	}
 	if len(found) == 1 {
@@ -242,62 +273,90 @@ func (s *settingsPage) detectSteamAPI() {
 	}, s.a.win)
 }
 
+func (s *settingsPage) downloadSteamCMD() {
+	data := strings.TrimSpace(s.dataDir.Text)
+	if data == "" {
+		data = s.a.cfg.DataDir
+	}
+	dir := filepath.Join(data, "steamcmd")
+	wrapper := strings.TrimSpace(s.serverWrapper.Text)
+	var exe string
+	s.a.runTask("Download steamcmd", func(t *task) error {
+		var err error
+		exe, err = workshop.InstallSteamCMD(t.ctx, dir, wrapper, t.log)
+		return err
+	}, func() {
+		s.steamcmdPath.SetText(exe)
+		dialog.ShowInformation("steamcmd", "Installed to "+exe+". Click Save to keep this path. Workshop downloads use the Install dir below (defaults to the same folder).", s.a.win)
+	})
+}
+
 func (s *settingsPage) object() fyne.CanvasObject {
 	detectCmd := widget.NewButton("Detect", func() {
-		if p := workshop.FindSteamCMD(); p != "" {
+		if p := workshop.FindSteamCMD(filepath.Join(s.a.cfg.DataDir, "steamcmd")); p != "" {
 			s.steamcmdPath.SetText(p)
 		} else {
-			dialog.ShowInformation("Not found", "steamcmd was not found in PATH. Install it (https://developer.valvesoftware.com/wiki/SteamCMD) or select it manually.", s.a.win)
+			dialog.ShowInformation("Not found", "steamcmd was not found. Click Download to install it into the GWorX data folder, or install it yourself (https://developer.valvesoftware.com/wiki/SteamCMD).", s.a.win)
 		}
 	})
+	downloadCmd := widget.NewButtonWithIcon("Download", theme.DownloadIcon(), s.downloadSteamCMD)
+	cmdButtons := container.NewHBox(detectCmd, downloadCmd)
 	loginBtn := widget.NewButtonWithIcon("Log in to Steam…", theme.LoginIcon(), s.login)
 
-	s.steamcmdCard = widget.NewCard("steamcmd", "Credentials are cached by steamcmd after the first login; GWorX never stores your password.",
-		widget.NewForm(
-			widget.NewFormItem("steamcmd", container.NewBorder(nil, nil, nil, detectCmd, s.a.pathEntry(s.steamcmdPath, false, nil, nil))),
+	s.steamcmdCard = card("steamcmd", "Credentials are cached by steamcmd after the first login; GWorX never stores your password. Download installs Valve's steamcmd into the data folder.",
+		framePad(widget.NewForm(
+			widget.NewFormItem("steamcmd", container.NewBorder(nil, nil, nil, cmdButtons, s.a.pathEntry(s.steamcmdPath, false, nil, nil))),
 			widget.NewFormItem("Steam username", container.NewBorder(nil, nil, nil, loginBtn, s.username)),
 			widget.NewFormItem("", s.anonymous),
 			widget.NewFormItem("Install dir", s.a.pathEntry(s.installDir, true, nil, nil)),
-		))
+		)))
 
 	detectAPI := widget.NewButton("Detect", s.detectSteamAPI)
 	testBtn := widget.NewButtonWithIcon("Test connection", theme.ConfirmIcon(), s.testSteamworks)
-	s.steamworksCard = widget.NewCard("Steamworks", "Uses the running Steam client. Steam shows you as playing Garry's Mod while GWorX is connected.",
-		widget.NewForm(
+	s.steamworksCard = card("Steamworks", "Talks to the running Steam client using the bundled Steam API. Leave the path empty to use the bundled library. While connected, Steam shows you in Garry's Mod (\"In the Workshop\").",
+		framePad(widget.NewForm(
 			widget.NewFormItem("steam_api library", container.NewBorder(nil, nil, nil, detectAPI, s.a.pathEntry(s.steamAPIPath, false, nil, nil))),
 			widget.NewFormItem("", container.NewHBox(testBtn)),
-		))
+		)))
 
-	folders := widget.NewCard("Folders", "", widget.NewForm(
+	folders := card("Folders", "", framePad(widget.NewForm(
 		widget.NewFormItem("Data folder", s.a.pathEntry(s.dataDir, true, nil, nil)),
 		widget.NewFormItem("Downloaded GMAs", s.a.pathEntry(s.downloadsDir, true, nil, nil)),
 		widget.NewFormItem("Uploads (extracted)", s.a.pathEntry(s.uploadsDir, true, nil, nil)),
 		widget.NewFormItem("", s.autoExtract),
-	))
+	)))
 
-	build := widget.NewCard("Build defaults", "", widget.NewForm(
+	build := card("Build defaults", "", framePad(widget.NewForm(
 		widget.NewFormItem("Default author", s.author),
 		widget.NewFormItem("Default ignore list", s.ignore),
-	))
+	)))
 
-	web := widget.NewCard("Steam Web API (optional)", "Lets \"My Addons → Refresh\" list your items when using steamcmd. Get a key at steamcommunity.com/dev/apikey.",
-		widget.NewForm(
+	servers := card("Dedicated servers", "Used by every server instance.", framePad(widget.NewForm(
+		&widget.FormItem{Text: "Steam Account Token", Widget: s.serverToken,
+			HintText: "Added as +sv_setsteamaccount. Create one at steamcommunity.com/dev/managegameservers (app 4000)"},
+		&widget.FormItem{Text: "Launch wrapper", Widget: s.serverWrapper,
+			HintText: "Command put in front of srcds_run and steamcmd (e.g. steam-run on NixOS)"},
+	)))
+
+	web := card("Steam Web API (optional)", "Lets \"My Addons → Refresh\" list your items when using steamcmd. Get a key at steamcommunity.com/dev/apikey.",
+		framePad(widget.NewForm(
 			widget.NewFormItem("API key", s.webKey),
 			widget.NewFormItem("SteamID64", s.steamID64),
-		))
+		)))
 
 	s.updateCards()
 
 	saveBtn := widget.NewButtonWithIcon("Save", theme.DocumentSaveIcon(), s.save)
 	saveBtn.Importance = widget.HighImportance
-	revertBtn := widget.NewButtonWithIcon("Revert", theme.ContentUndoIcon(), s.load)
+	revertBtn := widget.NewButtonWithIcon("Revert", theme.ContentUndoIcon(), func() { s.revert() })
 
 	body := container.NewVBox(
-		widget.NewCard("Workshop backend", "", s.backend),
+		card("Workshop backend", "", framePad(s.backend)),
 		s.steamcmdCard,
 		s.steamworksCard,
 		folders,
 		build,
+		servers,
 		web,
 	)
 

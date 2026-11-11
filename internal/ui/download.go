@@ -32,6 +32,7 @@ type downloadPage struct {
 	desc    *widget.Label
 
 	infoSeq int
+	shownID uint64
 }
 
 func newDownloadPage(a *App) *downloadPage {
@@ -44,9 +45,13 @@ func newDownloadPage(a *App) *downloadPage {
 	d.extract = widget.NewCheck("Extract files to the uploads folder", nil)
 	d.extract.SetChecked(a.cfg.AutoExtract)
 
-	d.preview = canvas.NewImageFromResource(nil)
-	d.preview.FillMode = canvas.ImageFillContain
-	d.preview.SetMinSize(fyne.NewSize(192, 108))
+	d.preview = newThumb(160)
+	d.preview.Hide()
+	a.previews.subscribe(func() {
+		if d.shownID != 0 {
+			setThumb(d.preview, a.previews.workshop(d.shownID))
+		}
+	})
 
 	d.title = widget.NewLabel("")
 	d.title.TextStyle.Bold = true
@@ -75,18 +80,15 @@ func (d *downloadPage) fetchInfo() {
 	d.title.SetText(fmt.Sprintf("Loading %d...", id))
 	d.meta.SetText("")
 	d.desc.SetText("")
-	d.preview.Resource = nil
-	d.preview.Refresh()
+	d.shownID = id
+	setThumb(d.preview, d.a.previews.workshop(id))
+	d.preview.Show()
 
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
 		items, err := workshop.GetDetails(ctx, id)
-		var img []byte
-		if err == nil && items[0].PreviewURL != "" {
-			img, _ = workshop.FetchBytes(ctx, items[0].PreviewURL, 8<<20)
-		}
 
 		fyne.Do(func() {
 			if seq != d.infoSeq {
@@ -119,10 +121,6 @@ func (d *downloadPage) fetchInfo() {
 			}
 			d.desc.SetText(desc)
 
-			if len(img) > 0 {
-				d.preview.Resource = fyne.NewStaticResource(fmt.Sprintf("preview_%d", id), img)
-				d.preview.Refresh()
-			}
 		})
 	}()
 }

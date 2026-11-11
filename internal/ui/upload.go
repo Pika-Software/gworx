@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/theme"
@@ -37,6 +38,7 @@ type uploadPage struct {
 	title       *widget.Entry
 	description *widget.Entry
 	preview     *widget.Entry
+	thumb       *canvas.Image
 	visibility  *widget.Select
 	changeNote  *widget.Entry
 
@@ -65,6 +67,10 @@ func newUploadPage(a *App) *uploadPage {
 	u.description.SetPlaceHolder("Workshop description (BBCode supported). Empty keeps the current one on updates.")
 
 	u.preview = widget.NewEntry()
+	u.thumb = newThumb(128)
+	u.preview.OnChanged = func(string) { u.showThumb() }
+	u.itemID.OnChanged = func(string) { u.showThumb() }
+	a.previews.subscribe(u.showThumb)
 	u.preview.SetPlaceHolder("JPG/PNG/GIF, under 1 MB (required for new items)")
 
 	u.visibility = widget.NewSelect(workshop.VisibilityNames, nil)
@@ -119,6 +125,19 @@ func (u *uploadPage) inspectGMA(p string) {
 	if u.title.Text == "" {
 		u.title.SetText(inf.Title)
 	}
+}
+
+// showThumb previews the selected image, or the current Workshop image of the item being updated.
+func (u *uploadPage) showThumb() {
+	if p := strings.TrimSpace(u.preview.Text); p != "" {
+		setThumb(u.thumb, u.a.previews.file(p))
+		return
+	}
+	if id, err := workshop.ParseID(u.itemID.Text); err == nil {
+		setThumb(u.thumb, u.a.previews.workshop(id))
+		return
+	}
+	setThumb(u.thumb, nil)
 }
 
 // useGMA switches to GMA mode with the given file (e.g. right after a build).
@@ -238,7 +257,10 @@ func (u *uploadPage) object() fyne.CanvasObject {
 		widget.NewFormItem("Workshop item", u.itemID),
 		widget.NewFormItem("Title", u.title),
 		widget.NewFormItem("Description", u.description),
-		widget.NewFormItem("Preview image", u.a.pathEntry(u.preview, false, []string{".jpg", ".jpeg", ".png", ".gif"}, nil)),
+		&widget.FormItem{Text: "Preview image", Widget: container.NewVBox(
+			u.a.pathEntry(u.preview, false, []string{".jpg", ".jpeg", ".png", ".gif"}, nil),
+			container.NewHBox(u.thumb),
+		), HintText: "Leave empty when updating to keep the current Workshop image"},
 		widget.NewFormItem("Visibility", u.visibility),
 		widget.NewFormItem("Change note", u.changeNote),
 	)
@@ -254,8 +276,8 @@ func (u *uploadPage) object() fyne.CanvasObject {
 	uploadBtn.Importance = widget.HighImportance
 
 	body := container.NewVBox(
-		widget.NewCard("Source", "", container.NewVBox(u.mode, u.source)),
-		widget.NewCard("Workshop", "", workshopForm),
+		card("Source", "", framePad(container.NewVBox(u.mode, u.source))),
+		card("Workshop", "", framePad(workshopForm)),
 	)
 
 	return container.NewBorder(nil, container.NewBorder(nil, nil, nil, container.NewHBox(newBtn, uploadBtn), u.backendLabel), nil, nil,

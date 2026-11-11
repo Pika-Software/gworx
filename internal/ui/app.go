@@ -4,6 +4,7 @@ package ui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -32,13 +33,14 @@ type App struct {
 	cfg   *config.Config
 	store *store.Store
 
-	log *logView
+	log      *logView
+	previews *previewCache
 
 	busy atomic.Bool
 
 	tabs         *container.AppTabs
-	workshopTabs *container.AppTabs
-	toolsTabs    *container.AppTabs
+	workshopTabs *sideTabs
+	toolsTabs    *sideTabs
 
 	download *downloadPage
 	upload   *uploadPage
@@ -47,6 +49,7 @@ type App struct {
 	build    *buildPage
 	extract  *extractPage
 	settings *settingsPage
+	servers  *serverPage
 }
 
 func New(fa fyne.App, win fyne.Window, cfg *config.Config, st *store.Store) *App {
@@ -57,6 +60,7 @@ func New(fa fyne.App, win fyne.Window, cfg *config.Config, st *store.Store) *App
 		store: st,
 		log:   newLogView(),
 	}
+	a.previews = newPreviewCache()
 	a.svc = core.New(cfg, st, a)
 
 	st.OnChange = func() {
@@ -75,7 +79,34 @@ func New(fa fyne.App, win fyne.Window, cfg *config.Config, st *store.Store) *App
 
 // Shutdown releases the Steam API if it was used.
 func (a *App) Shutdown() {
+	a.svc.Servers.StopAll()
 	a.svc.Close()
+}
+
+// RequestClose closes the window, asking first when dedicated servers are running.
+func (a *App) RequestClose() {
+	n := a.svc.Servers.Running()
+	if n == 0 {
+		a.Shutdown()
+		a.win.Close()
+		return
+	}
+	dialog.ShowConfirm("Quit GWorX",
+		fmt.Sprintf("%d dedicated server(s) still running. Stop them and quit?", n),
+		func(ok bool) {
+			if !ok {
+				return
+			}
+			wait := dialog.NewCustomWithoutButtons("Stopping servers", widget.NewProgressBarInfinite(), a.win)
+			wait.Show()
+			go func() {
+				a.Shutdown()
+				fyne.Do(func() {
+					wait.Hide()
+					a.win.Close()
+				})
+			}()
+		}, a.win)
 }
 
 func (a *App) Content() fyne.CanvasObject {
@@ -86,34 +117,39 @@ func (a *App) Content() fyne.CanvasObject {
 	a.build = newBuildPage(a)
 	a.extract = newExtractPage(a)
 	a.settings = newSettingsPage(a)
+	a.servers = newServerPage(a)
 
-	a.workshopTabs = container.NewAppTabs(
-		container.NewTabItemWithIcon("Download", theme.DownloadIcon(), a.download.object()),
-		container.NewTabItemWithIcon("Upload", theme.UploadIcon(), a.upload.object()),
-		container.NewTabItemWithIcon("My Addons", theme.AccountIcon(), a.mine.object()),
-		container.NewTabItemWithIcon("History", theme.HistoryIcon(), a.history.object()),
+	a.workshopTabs = newSideTabs(
+		sideTab{"Download", theme.DownloadIcon(), inset(a.download.object())},
+		sideTab{"Upload", theme.UploadIcon(), inset(a.upload.object())},
+		sideTab{"My Addons", theme.AccountIcon(), inset(a.mine.object())},
+		sideTab{"History", theme.HistoryIcon(), inset(a.history.object())},
 	)
-	a.workshopTabs.SetTabLocation(container.TabLocationLeading)
-	a.workshopTabs.OnSelected = func(*container.TabItem) { a.upload.refreshBackendLabel() }
+	a.workshopTabs.OnSelected = func(int) { a.upload.refreshBackendLabel() }
 
-	a.toolsTabs = container.NewAppTabs(
-		container.NewTabItemWithIcon("Build", theme.DocumentCreateIcon(), a.build.object()),
-		container.NewTabItemWithIcon("Extract", theme.FolderOpenIcon(), a.extract.object()),
+	a.toolsTabs = newSideTabs(
+		sideTab{"Extract", theme.FolderOpenIcon(), inset(a.extract.object())},
+		sideTab{"Build", theme.DocumentCreateIcon(), inset(a.build.object())},
 	)
-	a.toolsTabs.SetTabLocation(container.TabLocationLeading)
+
+	// Match rail width across Workshop and GMA Tools (longest label wins).
+	noteSideTabWidth(a.workshopTabs.buttonMinWidth())
+	noteSideTabWidth(a.toolsTabs.buttonMinWidth())
+	a.workshopTabs.Refresh()
+	a.toolsTabs.Refresh()
 
 	a.tabs = container.NewAppTabs(
-		container.NewTabItem("Steam Workshop", a.workshopTabs),
-		container.NewTabItem("GMA Tools", a.toolsTabs),
-		container.NewTabItem("Dedicated Server", container.NewCenter(widget.NewLabel("Coming soon"))),
-		container.NewTabItem("Log", a.log.object(a)),
-		container.NewTabItem("Settings", a.settings.object()),
+		container.NewTabItem("Steam Workshop", inset(a.workshopTabs)),
+		container.NewTabItem("GMA Tools", inset(a.toolsTabs)),
+		container.NewTabItem("Dedicated Server", inset(a.servers.object())),
+		container.NewTabItem("Log", inset(a.log.object(a))),
+		container.NewTabItem("Settings", inset(a.settings.object())),
 	)
+
+	a.win.SetOnDropped(a.handleDrop)
 
 	return a.tabs
 }
-
-// --- navigation -------------------------------------------------------------
 
 func (a *App) showWorkshopTab(i int) {
 	a.tabs.SelectIndex(0)
@@ -125,13 +161,9 @@ func (a *App) showToolsTab(i int) {
 	a.toolsTabs.SelectIndex(i)
 }
 
-// --- backend ----------------------------------------------------------------
-
 func (a *App) backend() workshop.Backend { return a.svc.Backend() }
 
 func (a *App) defaultAuthor() string { return a.svc.DefaultAuthor() }
-
-// --- credential prompts (workshop.Prompter) ---------------------------------
 
 func (a *App) askSecret(title, label, hint string, password bool) (string, bool) {
 	type answer struct {
@@ -169,8 +201,6 @@ func (a *App) Password(user string) (string, bool) {
 func (a *App) GuardCode(user string, hint string) (string, bool) {
 	return a.askSecret("Steam Guard", "Code", hint, false)
 }
-
-// --- tasks ------------------------------------------------------------------
 
 type task struct {
 	ctx      context.Context
@@ -287,8 +317,6 @@ func (a *App) runTask(title string, fn func(t *task) error, onSuccess func()) {
 	}()
 }
 
-// --- file pickers -----------------------------------------------------------
-
 func listable(dir string) fyne.ListableURI {
 	for dir != "" {
 		if st, err := os.Stat(dir); err == nil && st.IsDir() {
@@ -311,8 +339,20 @@ func (a *App) dialogSize() fyne.Size {
 	return fyne.NewSize(max(s.Width*0.9, 600), max(s.Height*0.9, 450))
 }
 
-// pickFolder opens a folder chooser starting at start and calls done with the selected path.
+// pickFolder opens the system folder chooser (Fyne's as a fallback) starting
+// at start and calls done with the selected path.
 func (a *App) pickFolder(start string, done func(string)) {
+	a.pickNative(fileRequest{title: "Select folder", start: start, folder: true}, done,
+		func() { a.fynePickFolder(start, done) })
+}
+
+// pickFile opens the system file chooser (Fyne's as a fallback) filtered by extensions.
+func (a *App) pickFile(start string, exts []string, done func(string)) {
+	a.pickNative(fileRequest{title: "Select file", start: start, exts: exts}, done,
+		func() { a.fynePickFile(start, exts, done) })
+}
+
+func (a *App) fynePickFolder(start string, done func(string)) {
 	d := dialog.NewFolderOpen(func(u fyne.ListableURI, err error) {
 		if err != nil {
 			dialog.ShowError(err, a.win)
@@ -329,8 +369,7 @@ func (a *App) pickFolder(start string, done func(string)) {
 	d.Show()
 }
 
-// pickFile opens a file chooser filtered by extensions.
-func (a *App) pickFile(start string, exts []string, done func(string)) {
+func (a *App) fynePickFile(start string, exts []string, done func(string)) {
 	d := dialog.NewFileOpen(func(r fyne.URIReadCloser, err error) {
 		if err != nil {
 			dialog.ShowError(err, a.win)
@@ -374,8 +413,6 @@ func (a *App) pathEntry(e *widget.Entry, folder bool, exts []string, after func(
 	})
 	return container.NewBorder(nil, nil, nil, btn, e)
 }
-
-// --- misc helpers -----------------------------------------------------------
 
 func (a *App) openPath(p string) {
 	if p == "" {
