@@ -28,7 +28,7 @@
       };
 
       # Update with: nix build .#gworx 2>&1 | grep got:
-      vendorHash = "sha256-UjZ6LuS4IHT7Hh745qN64rQA4yGK1NlZnC7uRVeLKow=";
+      vendorHash = "sha256-DIgXyTpVfaJW1O5dWx8yna/qB2Fzsq2X490NZsGahMI=";
 
       # Libraries Fyne (GLFW) links against
       guiLibs =
