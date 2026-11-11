@@ -3,6 +3,7 @@ package ui
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 
@@ -23,7 +24,13 @@ import (
 const (
 	modeGMA   = "Upload a finished GMA file"
 	modeBuild = "Build the GMA from a folder"
+
+	visibilityKeepLabel = "Keep current (Private for new items)"
 )
+
+// visibilityOptions are the choices of the Visibility select: index 0 keeps
+// the current value, index i+1 is workshop visibility i.
+var visibilityOptions = append([]string{visibilityKeepLabel}, workshop.VisibilityNames...)
 
 type uploadPage struct {
 	a *App
@@ -53,6 +60,9 @@ func newUploadPage(a *App) *uploadPage {
 
 	u.gmaPath = widget.NewEntry()
 	u.gmaPath.SetPlaceHolder("Path to a .gma file")
+	// Re-inspect whenever the path changes (typed or picked) and drop the
+	// project of a previously built GMA, which no longer applies.
+	u.gmaPath.OnChanged = func(string) { u.inspectGMA() }
 	u.gmaInfo = wrapLabel("")
 	u.build = newBuildForm(a, false)
 
@@ -73,8 +83,8 @@ func newUploadPage(a *App) *uploadPage {
 	a.previews.subscribe(u.showThumb)
 	u.preview.SetPlaceHolder("JPG/PNG/GIF, under 1 MB (required for new items)")
 
-	u.visibility = widget.NewSelect(workshop.VisibilityNames, nil)
-	u.visibility.SetSelectedIndex(workshop.VisibilityPrivate)
+	u.visibility = widget.NewSelect(visibilityOptions, nil)
+	u.visibility.SetSelectedIndex(0)
 
 	u.changeNote = widget.NewMultiLineEntry()
 	u.changeNote.SetMinRowsVisible(2)
@@ -105,7 +115,7 @@ func (u *uploadPage) refreshBackendLabel() {
 func (u *uploadPage) showMode(m string) {
 	if m == modeGMA {
 		u.source.Objects = []fyne.CanvasObject{widget.NewForm(
-			widget.NewFormItem("GMA file", u.a.pathEntry(u.gmaPath, false, []string{".gma"}, u.inspectGMA)),
+			widget.NewFormItem("GMA file", u.a.pathEntry(u.gmaPath, false, []string{".gma"}, nil)),
 			widget.NewFormItem("", u.gmaInfo),
 		)}
 	} else {
@@ -114,8 +124,18 @@ func (u *uploadPage) showMode(m string) {
 	u.source.Refresh()
 }
 
-func (u *uploadPage) inspectGMA(p string) {
+// inspectGMA shows the metadata of the GMA in the path entry.
+func (u *uploadPage) inspectGMA() {
 	u.gmaProject = nil
+	p := strings.TrimSpace(u.gmaPath.Text)
+	if p == "" {
+		u.gmaInfo.SetText("")
+		return
+	}
+	if st, err := os.Stat(p); err != nil || st.IsDir() {
+		u.gmaInfo.SetText("File not found")
+		return
+	}
 	inf, err := gmaops.Inspect(p)
 	if err != nil {
 		u.gmaInfo.SetText("Can't read GMA: " + err.Error())
@@ -143,8 +163,7 @@ func (u *uploadPage) showThumb() {
 // useGMA switches to GMA mode with the given file (e.g. right after a build).
 func (u *uploadPage) useGMA(p string, project *gmaops.Project) {
 	u.mode.SetSelected(modeGMA)
-	u.gmaPath.SetText(p)
-	u.inspectGMA(p)
+	u.gmaPath.SetText(p) // runs inspectGMA, which clears gmaProject
 	u.gmaProject = project
 	if project != nil {
 		u.title.SetText(project.Title)
@@ -160,7 +179,11 @@ func (u *uploadPage) loadPublished(rec store.Published) {
 	u.title.SetText(rec.Title)
 	u.description.SetText(rec.Description)
 	u.preview.SetText(rec.PreviewPath)
-	u.visibility.SetSelectedIndex(rec.Visibility)
+	if rec.Visibility >= 0 && rec.Visibility < len(workshop.VisibilityNames) {
+		u.visibility.SetSelectedIndex(rec.Visibility + 1)
+	} else {
+		u.visibility.SetSelectedIndex(0)
+	}
 	u.changeNote.SetText("")
 
 	if rec.Project != nil {
@@ -172,7 +195,6 @@ func (u *uploadPage) loadPublished(rec store.Published) {
 	} else if rec.GMAPath != "" {
 		u.mode.SetSelected(modeGMA)
 		u.gmaPath.SetText(rec.GMAPath)
-		u.inspectGMA(rec.GMAPath)
 	}
 }
 
@@ -192,7 +214,7 @@ func (u *uploadPage) run() {
 		Description: u.description.Text,
 		PreviewPath: strings.TrimSpace(u.preview.Text),
 		ChangeNote:  u.changeNote.Text,
-		Visibility:  max(u.visibility.SelectedIndex(), 0),
+		Visibility:  max(u.visibility.SelectedIndex(), 0) - 1, // 0 = VisibilityKeep
 	}
 
 	var project *gmaops.Project
@@ -269,6 +291,8 @@ func (u *uploadPage) object() fyne.CanvasObject {
 		u.itemID.SetText("")
 		u.title.SetText("")
 		u.description.SetText("")
+		u.preview.SetText("")
+		u.visibility.SetSelectedIndex(0)
 		u.changeNote.SetText("")
 	})
 

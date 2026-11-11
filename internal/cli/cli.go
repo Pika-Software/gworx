@@ -291,7 +291,7 @@ func (p *printer) done() {
 // prompter asks for steamcmd credentials on the terminal.
 type prompter struct{}
 
-var errNoTTY = "no terminal to ask for credentials: run \"gworx login\" interactively first"
+const errNoTTY = "no terminal to ask for credentials: run \"gworx login\" interactively first"
 
 func (prompter) Password(user string) (string, bool) {
 	fd := int(os.Stdin.Fd())
@@ -392,7 +392,7 @@ func cmdUpload(ctx context.Context, name string, args []string) error {
 	title := e.fs.String("title", "", "Workshop title (default: addon title)")
 	descFile := e.fs.String("desc-file", "", "read the Workshop description from a file")
 	preview := e.fs.String("preview", "", "preview image (required for new items)")
-	vis := e.fs.String("visibility", "", "public, friends, private or unlisted (default: private for new items, kept for updates)")
+	vis := e.fs.String("visibility", "", "public, friends, private or unlisted (default: private for new items, unchanged for updates)")
 	note := e.fs.String("note", "", "change note")
 	bf := addBuildFlags(e.fs)
 
@@ -413,7 +413,7 @@ func cmdUpload(ctx context.Context, name string, args []string) error {
 		Title:       *title,
 		PreviewPath: *preview,
 		ChangeNote:  *note,
-		Visibility:  workshop.VisibilityPrivate,
+		Visibility:  workshop.VisibilityKeep,
 	}
 	if *idFlag != "" {
 		if req.ID, err = workshop.ParseID(*idFlag); err != nil {
@@ -430,11 +430,8 @@ func cmdUpload(ctx context.Context, name string, args []string) error {
 	}
 
 	rec, known := e.svc.Store.GetPublished(req.ID)
-	if req.ID != 0 && known {
-		req.Visibility = rec.Visibility
-		if req.PreviewPath == "" {
-			req.PreviewPath = rec.PreviewPath
-		}
+	if req.ID != 0 && known && req.PreviewPath == "" {
+		req.PreviewPath = rec.PreviewPath
 	}
 	if *vis != "" {
 		if req.Visibility, err = parseVisibility(*vis); err != nil {
@@ -910,6 +907,9 @@ func cmdInfo(ctx context.Context, name string, args []string) error {
 	return nil
 }
 
+// secretKeys are hidden when the whole config is printed.
+var secretKeys = []string{"web_api_key", "steam_account_token"}
+
 func cmdConfig(ctx context.Context, name string, args []string) error {
 	e := newEnv(name, "[get <key> | set <key> <value> | path]", false)
 	pos, err := e.parse(args)
@@ -932,6 +932,11 @@ func cmdConfig(ctx context.Context, name string, args []string) error {
 
 	switch {
 	case len(pos) == 0:
+		for _, k := range secretKeys {
+			if s, _ := m[k].(string); s != "" {
+				m[k] = "********" // use "config get <key>" to see it
+			}
+		}
 		return printJSON(m)
 	case pos[0] == "path" && len(pos) == 1:
 		fmt.Println(filepath.Join(config.Dir(), "config.json"))

@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
+	"hash/crc32"
 	"io/fs"
 	"os"
 	"path"
@@ -14,6 +14,8 @@ import (
 
 	"github.com/IGLOU-EU/go-wildcard/v2"
 	"github.com/unknown-gd/go-gma"
+
+	"github.com/Pika-Software/gworx/internal/fsutil"
 )
 
 // Project describes how to build a GMA file.
@@ -77,12 +79,8 @@ func matchIgnore(patterns []string, rel string, name string) bool {
 			continue
 		}
 
-		p = strings.TrimSuffix(p, "/")
-		if wildcard.Match(p, rel) || wildcard.Match(p, name) {
-			return true
-		}
-
-		lp := strings.ToLower(p)
+		// Matching is case-insensitive, like the paths inside a GMA.
+		lp := strings.ToLower(strings.TrimSuffix(p, "/"))
 		if wildcard.Match(lp, strings.ToLower(rel)) || wildcard.Match(lp, strings.ToLower(name)) {
 			return true
 		}
@@ -288,47 +286,17 @@ func Normalize(src, dst string) (*Info, error) {
 	if addon.Legacy && from != src {
 		// already a decompressed temporary copy, move it into place
 		if err := os.Rename(from, dst); err != nil {
-			err = copyFile(from, dst)
+			err = fsutil.CopyFile(from, dst)
 			cleanup()
 			if err != nil {
 				return nil, err
 			}
 		}
-	} else if err := copyFile(from, dst); err != nil {
+	} else if err := fsutil.CopyFile(from, dst); err != nil {
 		return nil, err
 	}
 
 	return Inspect(dst)
-}
-
-func copyFile(src, dst string) error {
-	if filepath.Clean(src) == filepath.Clean(dst) {
-		return nil
-	}
-
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-
-	tmp := dst + ".part"
-	out, err := os.Create(tmp)
-	if err != nil {
-		return err
-	}
-
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		os.Remove(tmp)
-		return err
-	}
-	if err := out.Close(); err != nil {
-		os.Remove(tmp)
-		return err
-	}
-
-	return os.Rename(tmp, dst)
 }
 
 // ExtractOptions control Extract.
@@ -369,17 +337,13 @@ func Extract(p, dest string, opt ExtractOptions) (int, error) {
 			continue
 		}
 
-		if opt.VerifyCRC {
-			if ok, err := f.IsValid(); err != nil {
-				return written, err
-			} else if !ok {
-				warn(fmt.Sprintf("checksum mismatch: %s", f.Path))
-			}
-		}
-
 		data, err := f.ReadData()
 		if err != nil {
 			return written, fmt.Errorf("%s: %w", f.Path, err)
+		}
+		// Check the data already in memory instead of f.IsValid, which reads the file again.
+		if opt.VerifyCRC && f.Checksum != 0 && crc32.ChecksumIEEE(data) != f.Checksum {
+			warn(fmt.Sprintf("checksum mismatch: %s", f.Path))
 		}
 
 		target := filepath.Join(dest, local)

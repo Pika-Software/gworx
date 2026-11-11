@@ -11,9 +11,6 @@ import (
 	"fyne.io/fyne/v2/widget"
 )
 
-// sideTabPadScale grows tab button chrome without changing text/icon size.
-const sideTabPadScale = 1.18
-
 // sideTabWidth is shared so Workshop and GMA Tools rails match.
 var sideTabWidth float32
 
@@ -41,7 +38,6 @@ func newSideTabs(items ...sideTab) *sideTabs {
 	t.buttons = make([]*sideTabButton, len(items))
 	objs := make([]fyne.CanvasObject, len(items))
 	for i, it := range items {
-		i := i
 		objs[i] = it.Content
 		t.buttons[i] = newSideTabButton(it.Text, it.Icon, func() { t.SelectIndex(i) })
 	}
@@ -61,8 +57,6 @@ func (t *sideTabs) SelectIndex(i int) {
 		t.OnSelected(i)
 	}
 }
-
-func (t *sideTabs) SelectedIndex() int { return t.selected }
 
 func (t *sideTabs) applySelection() {
 	for i, b := range t.buttons {
@@ -93,7 +87,6 @@ func (t *sideTabs) CreateRenderer() fyne.WidgetRenderer {
 func (t *sideTabs) Refresh() {
 	noteSideTabWidth(t.buttonMinWidth())
 	for _, b := range t.buttons {
-		b.minWidth = sideTabWidth
 		b.Refresh()
 	}
 	t.BaseWidget.Refresh()
@@ -116,12 +109,11 @@ func noteSideTabWidth(w float32) {
 type sideTabButton struct {
 	widget.BaseWidget
 
-	text      string
-	icon      fyne.Resource
-	selected  bool
-	hovered   bool
-	minWidth  float32
-	onTapped  func()
+	text     string
+	icon     fyne.Resource
+	selected bool
+	hovered  bool
+	onTapped func()
 }
 
 func newSideTabButton(text string, icon fyne.Resource, onTap func()) *sideTabButton {
@@ -173,7 +165,7 @@ func (b *sideTabButton) CreateRenderer() fyne.WidgetRenderer {
 
 func (b *sideTabButton) naturalWidth() float32 {
 	th := b.Theme()
-	pad := th.Size(theme.SizeNameInnerPadding) * sideTabPadScale
+	pad := th.Size(SizeNameSideTabPad)
 	icon := th.Size(theme.SizeNameInlineIcon) * 2
 	label := canvas.NewText(b.text, color.Black)
 	label.TextSize = th.Size(theme.SizeNameText)
@@ -182,16 +174,13 @@ func (b *sideTabButton) naturalWidth() float32 {
 
 func (b *sideTabButton) MinSize() fyne.Size {
 	th := b.Theme()
-	pad := th.Size(theme.SizeNameInnerPadding) * sideTabPadScale
+	pad := th.Size(SizeNameSideTabPad)
 	icon := th.Size(theme.SizeNameInlineIcon) * 2
 	label := canvas.NewText(b.text, color.Black)
 	label.TextSize = th.Size(theme.SizeNameText)
 	text := label.MinSize()
 	h := icon + th.Size(theme.SizeNamePadding) + text.Height + pad*2
-	w := fyne.Max(fyne.Max(text.Width, icon)+pad, b.minWidth)
-	if sideTabWidth > w {
-		w = sideTabWidth
-	}
+	w := fyne.Max(fyne.Max(text.Width, icon)+pad, sideTabWidth)
 	return fyne.NewSize(w, h)
 }
 
@@ -210,7 +199,7 @@ func (r *sideTabButtonRenderer) Objects() []fyne.CanvasObject {
 
 func (r *sideTabButtonRenderer) Layout(size fyne.Size) {
 	th := r.b.Theme()
-	pad := th.Size(theme.SizeNameInnerPadding) * sideTabPadScale
+	pad := th.Size(SizeNameSideTabPad)
 	gap := th.Size(theme.SizeNamePadding)
 	iconSize := th.Size(theme.SizeNameInlineIcon) * 2
 
@@ -259,7 +248,7 @@ func (r *sideTabButtonRenderer) Refresh() {
 }
 
 var (
-	_ fyne.Tappable     = (*sideTabButton)(nil)
-	_ desktop.Hoverable = (*sideTabButton)(nil)
+	_ fyne.Tappable      = (*sideTabButton)(nil)
+	_ desktop.Hoverable  = (*sideTabButton)(nil)
 	_ desktop.Cursorable = (*sideTabButton)(nil)
 )

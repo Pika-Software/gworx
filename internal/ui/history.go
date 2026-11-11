@@ -14,6 +14,7 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
+	"github.com/Pika-Software/gworx/internal/core"
 	"github.com/Pika-Software/gworx/internal/store"
 	"github.com/Pika-Software/gworx/internal/workshop"
 )
@@ -55,7 +56,7 @@ func newHistoryPage(a *App) *historyPage {
 				title = fmt.Sprintf("Item %d", it.ID)
 			}
 			box.Objects[0].(*widget.Label).SetText(title)
-			box.Objects[1].(*widget.Label).SetText(fmt.Sprintf("%d  ·  %s  ·  %s", it.ID, humanSize(it.Size), it.DownloadedAt.Format("2006-01-02 15:04")))
+			box.Objects[1].(*widget.Label).SetText(fmt.Sprintf("%d  ·  %s  ·  %s", it.ID, core.HumanSize(it.Size), it.DownloadedAt.Format("2006-01-02 15:04")))
 		},
 	)
 	h.list.OnSelected = func(i widget.ListItemID) {
@@ -143,7 +144,7 @@ func (h *historyPage) showDetails() {
 	if it.Author != "" {
 		fmt.Fprintf(&b, "GMA author: %s\n", it.Author)
 	}
-	fmt.Fprintf(&b, "Downloaded: %s\nSize: %s\n", it.DownloadedAt.Format(time.DateTime), humanSize(it.Size))
+	fmt.Fprintf(&b, "Downloaded: %s\nSize: %s\n", it.DownloadedAt.Format(time.DateTime), core.HumanSize(it.Size))
 
 	missing := func(p string) string {
 		if exists(p) {
@@ -164,7 +165,7 @@ func (h *historyPage) showDetails() {
 			widget.NewButtonWithIcon("Extract…", theme.FolderOpenIcon(), func() {
 				dest := it.ExtractedPath
 				if dest == "" {
-					dest = filepath.Join(h.a.cfg.Uploads(), fmt.Sprintf("%d_%s", it.ID, slug(it.Title)))
+					dest = h.a.svc.ExtractDest(it.ID, it.Title)
 				}
 				h.a.extract.setGMA(it.GMAPath, dest)
 				h.a.showToolsTab(0)

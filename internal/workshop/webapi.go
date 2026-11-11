@@ -43,15 +43,12 @@ func (f *flexInt) UnmarshalJSON(b []byte) error {
 type apiDetails struct {
 	PublishedFileID string  `json:"publishedfileid"`
 	Result          int     `json:"result"`
-	Creator         string  `json:"creator"`
 	ConsumerAppID   int     `json:"consumer_app_id"`
 	Title           string  `json:"title"`
 	Description     string  `json:"description"`
 	FileDescription string  `json:"file_description"`
-	FileURL         string  `json:"file_url"`
 	FileSize        flexInt `json:"file_size"`
 	PreviewURL      string  `json:"preview_url"`
-	TimeCreated     int64   `json:"time_created"`
 	TimeUpdated     int64   `json:"time_updated"`
 	Visibility      int     `json:"visibility"`
 	Tags            []struct {
@@ -69,11 +66,7 @@ func (d *apiDetails) item() Item {
 		ID:          id,
 		Title:       d.Title,
 		Description: desc,
-		Creator:     d.Creator,
-		PreviewURL:  d.PreviewURL,
-		FileURL:     d.FileURL,
 		FileSize:    int64(d.FileSize),
-		Created:     d.TimeCreated,
 		Updated:     d.TimeUpdated,
 		Visibility:  d.Visibility,
 	}
@@ -100,6 +93,10 @@ func GetDetails(ctx context.Context, ids ...uint64) ([]Item, error) {
 
 	if err := apiCall(ctx, http.MethodPost, "https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/", form, &out); err != nil {
 		return nil, err
+	}
+
+	if len(out.Response.Details) != len(ids) {
+		return nil, fmt.Errorf("steam web api returned %d of %d requested items", len(out.Response.Details), len(ids))
 	}
 
 	items := make([]Item, 0, len(out.Response.Details))

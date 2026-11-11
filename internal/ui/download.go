@@ -105,7 +105,7 @@ func (d *downloadPage) fetchInfo() {
 			var b strings.Builder
 			fmt.Fprintf(&b, "ID: %d", it.ID)
 			if it.FileSize > 0 {
-				fmt.Fprintf(&b, "   Size: %s", humanSize(it.FileSize))
+				fmt.Fprintf(&b, "   Size: %s", core.HumanSize(it.FileSize))
 			}
 			if it.Updated > 0 {
 				fmt.Fprintf(&b, "   Updated: %s", time.Unix(it.Updated, 0).Format(time.DateOnly))
@@ -115,12 +115,7 @@ func (d *downloadPage) fetchInfo() {
 			}
 			d.meta.SetText(b.String())
 
-			desc := it.Description
-			if len(desc) > 1500 {
-				desc = desc[:1500] + "…"
-			}
-			d.desc.SetText(desc)
-
+			d.desc.SetText(truncate(it.Description, 1500))
 		})
 	}()
 }

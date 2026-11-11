@@ -158,6 +158,12 @@ func (s *settingsPage) updateCards() {
 func (s *settingsPage) apply() error {
 	cfg := s.a.cfg
 
+	// Validate before touching cfg so a failed save leaves it unchanged.
+	data := strings.TrimSpace(s.dataDir.Text)
+	if data == "" {
+		return errors.New("the data folder can't be empty")
+	}
+
 	if s.backend.Selected == backendLabelSteamworks {
 		cfg.Backend = config.BackendSteamworks
 	} else {
@@ -175,10 +181,6 @@ func (s *settingsPage) apply() error {
 	cfg.SteamCMDInstallDir = strings.TrimSpace(s.installDir.Text)
 	cfg.SteamAPIPath = newLib
 
-	data := strings.TrimSpace(s.dataDir.Text)
-	if data == "" {
-		return errors.New("the data folder can't be empty")
-	}
 	cfg.DataDir = data
 	cfg.DownloadsDir = strings.TrimSpace(s.downloadsDir.Text)
 	cfg.UploadsDir = strings.TrimSpace(s.uploadsDir.Text)
@@ -236,9 +238,7 @@ func (s *settingsPage) login() {
 
 func (s *settingsPage) testSteamworks() {
 	sw := s.a.svc.SW
-	if !sw.Initialized() {
-		sw.LibPath = strings.TrimSpace(s.steamAPIPath.Text)
-	}
+	sw.SetLibPath(strings.TrimSpace(s.steamAPIPath.Text))
 	s.a.runTask("Connect to Steam", func(t *task) error {
 		ctx, cancel := context.WithTimeout(t.ctx, time.Minute)
 		defer cancel()

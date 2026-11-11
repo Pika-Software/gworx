@@ -54,7 +54,7 @@ func New(cfg *config.Config, st *store.Store, prompt workshop.Prompter) *Service
 	s := &Service{
 		Cfg:    cfg,
 		Store:  st,
-		SW:     &workshop.Steamworks{LibPath: cfg.SteamAPIPath, StagingDir: filepath.Join(cfg.DataDir, "staging")},
+		SW:     workshop.NewSteamworks(cfg.SteamAPIPath, filepath.Join(cfg.DataDir, "staging")),
 		Prompt: prompt,
 	}
 	s.Servers, s.ServersErr = server.Open(config.Dir(), func() server.Settings {
@@ -69,9 +69,7 @@ func (s *Service) Close() { s.SW.Close() }
 // Backend returns the Workshop backend selected in the config.
 func (s *Service) Backend() workshop.Backend {
 	if s.Cfg.Backend == config.BackendSteamworks {
-		if !s.SW.Initialized() {
-			s.SW.LibPath = s.Cfg.SteamAPIPath
-		}
+		s.SW.SetLibPath(s.Cfg.SteamAPIPath)
 		return s.SW
 	}
 	return s.SteamCMD()
@@ -285,13 +283,17 @@ func (s *Service) Upload(ctx context.Context, opt UploadOptions, r Reporter) (ui
 	}
 	r.log(fmt.Sprintf("Published item %d", id))
 
+	if req.Visibility < 0 && req.ID == 0 {
+		req.Visibility = workshop.VisibilityPrivate // what the backends create new items as
+	}
+
 	return id, s.Store.UpsertPublished(store.Published{
 		ID:          id,
 		Title:       req.Title,
 		Description: req.Description,
 		GMAPath:     req.GMAPath,
 		PreviewPath: req.PreviewPath,
-		Visibility:  req.Visibility,
+		Visibility:  req.Visibility, // VisibilityKeep keeps the stored value
 		Project:     p,
 		UpdatedAt:   time.Now(),
 	})
@@ -322,7 +324,7 @@ func (s *Service) RefreshPublished(ctx context.Context, r Reporter) ([]workshop.
 
 	for _, it := range items {
 		rec := store.Published{ID: it.ID, Title: it.Title, Description: it.Description, Visibility: it.Visibility}
-		if old, ok := s.Store.GetPublished(it.ID); ok {
+		if old, ok := s.Store.GetPublished(it.ID); ok && old.Visibility >= 0 {
 			rec.Visibility = old.Visibility
 		}
 		if it.Updated > 0 {

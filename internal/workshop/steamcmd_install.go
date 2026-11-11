@@ -15,6 +15,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/Pika-Software/gworx/internal/ansi"
 )
 
 const steamcmdCDN = "https://steamcdn-a.akamaihd.net/client/installer/"
@@ -151,8 +153,13 @@ func downloadFile(ctx context.Context, url, dest string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
 	_, err = io.Copy(f, res.Body)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		os.Remove(dest)
+	}
 	return err
 }
 
@@ -316,13 +323,13 @@ func scanLines(r io.Reader, log Logger) {
 				line := strings.TrimSpace(pending[:i])
 				pending = pending[i+1:]
 				if line != "" {
-					log(ansiRe.ReplaceAllString(line, ""))
+					log(ansi.Strip(line))
 				}
 			}
 		}
 		if err != nil {
 			if line := strings.TrimSpace(pending); line != "" {
-				log(ansiRe.ReplaceAllString(line, ""))
+				log(ansi.Strip(line))
 			}
 			return
 		}

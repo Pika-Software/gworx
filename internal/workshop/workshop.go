@@ -23,6 +23,10 @@ const (
 	VisibilityFriendsOnly = 1
 	VisibilityPrivate     = 2
 	VisibilityUnlisted    = 3
+
+	// VisibilityKeep leaves the visibility of an existing item unchanged.
+	// New items are created as private.
+	VisibilityKeep = -1
 )
 
 var VisibilityNames = []string{"Public", "Friends only", "Private", "Unlisted"}
@@ -44,11 +48,7 @@ type Item struct {
 	ID          uint64
 	Title       string
 	Description string
-	Creator     string
-	PreviewURL  string
-	FileURL     string
 	FileSize    int64
-	Created     int64
 	Updated     int64
 	Visibility  int
 	Tags        []string
@@ -62,8 +62,9 @@ type UploadRequest struct {
 	Description string
 	PreviewPath string
 	ChangeNote  string
-	Visibility  int
-	Tags        []string
+	// Visibility is one of the Visibility* constants; VisibilityKeep sends none.
+	Visibility int
+	Tags       []string
 }
 
 type Backend interface {
@@ -79,7 +80,10 @@ type Backend interface {
 	CurrentUser() string
 }
 
-var idPattern = regexp.MustCompile(`^\d{1,20}$`)
+var (
+	idPattern = regexp.MustCompile(`^\d{1,20}$`)
+	idParamRe = regexp.MustCompile(`id=(\d+)`)
+)
 
 // ParseID accepts a numeric ID or any Workshop / Steam URL carrying ?id=.
 func ParseID(s string) (uint64, error) {
@@ -104,7 +108,7 @@ func ParseID(s string) (uint64, error) {
 		}
 	}
 
-	if m := regexp.MustCompile(`id=(\d+)`).FindStringSubmatch(s); m != nil {
+	if m := idParamRe.FindStringSubmatch(s); m != nil {
 		return strconv.ParseUint(m[1], 10, 64)
 	}
 

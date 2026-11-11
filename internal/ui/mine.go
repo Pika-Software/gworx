@@ -154,11 +154,7 @@ func (m *minePage) showDetails() {
 		fmt.Fprintf(&b, "Last GMA: %s\n", it.GMAPath)
 	}
 	if it.Description != "" {
-		desc := it.Description
-		if len(desc) > 800 {
-			desc = desc[:800] + "…"
-		}
-		fmt.Fprintf(&b, "\n%s", desc)
+		fmt.Fprintf(&b, "\n%s", truncate(it.Description, 800))
 	}
 	m.details.SetText(b.String())
 

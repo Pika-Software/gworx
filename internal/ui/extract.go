@@ -16,6 +16,7 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
+	"github.com/Pika-Software/gworx/internal/core"
 	"github.com/Pika-Software/gworx/internal/gmaops"
 )
 
@@ -92,7 +93,7 @@ func newExtractPage(a *App) *extractPage {
 			digits := len(fmt.Sprint(len(e.info.Files)))
 			num.SetText(fmt.Sprintf("%*d.", digits, i+1))
 			name.SetText(f.Path)
-			right.Objects[0].(*widget.Label).SetText(humanSize(f.Size))
+			right.Objects[0].(*widget.Label).SetText(core.HumanSize(f.Size))
 
 			status := right.Objects[1].(*fyne.Container).Objects[0].(*fyne.Container).Objects[0].(*widget.Icon)
 			switch {
@@ -115,6 +116,7 @@ func newExtractPage(a *App) *extractPage {
 
 	e.verifyBtn = widget.NewButtonWithIcon("Verify checksums", theme.SearchIcon(), e.runVerify)
 	e.verifyBar = widget.NewProgressBar()
+	e.verifyBar.TextFormatter = func() string { return "" }
 	e.verifyBar.Hide()
 	e.verifyInfo = widget.NewLabel("")
 	e.verifyInfo.Wrapping = fyne.TextWrapWord
@@ -260,10 +262,10 @@ func (e *extractPage) showMeta() {
 	}
 	items = append(items,
 		widget.NewFormItem("Required content", value(req)),
-		widget.NewFormItem("Files", value(fmt.Sprintf("%d (%s unpacked)", len(inf.Files), humanSize(total)))),
+		widget.NewFormItem("Files", value(fmt.Sprintf("%d (%s unpacked)", len(inf.Files), core.HumanSize(total)))),
 	)
 	if st, err := os.Stat(e.path); err == nil {
-		items = append(items, widget.NewFormItem("GMA size", value(humanSize(st.Size()))))
+		items = append(items, widget.NewFormItem("GMA size", value(core.HumanSize(st.Size()))))
 	}
 	if inf.Legacy {
 		items = append(items, widget.NewFormItem("Format", value("Legacy LZMA-compressed addon")))
@@ -285,7 +287,13 @@ func (e *extractPage) runVerify() {
 	e.verifyBar.Show()
 
 	go func() {
+		var last time.Time
 		res, err := gmaops.Verify(p, func(done, total int) {
+			// one UI update per file would flood the event queue on big addons
+			if done < total && time.Since(last) < 100*time.Millisecond {
+				return
+			}
+			last = time.Now()
 			fyne.Do(func() { e.verifyBar.SetValue(float64(done) / float64(total)) })
 		})
 		fyne.Do(func() {

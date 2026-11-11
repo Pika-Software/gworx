@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/Pika-Software/gworx/internal/fsutil"
 	"github.com/Pika-Software/gworx/internal/workshop"
 )
 
@@ -42,7 +43,11 @@ func Open(dir string, settings func() Settings) (*Manager, error) {
 	} else if err != nil {
 		return m, err
 	}
-	return m, json.Unmarshal(raw, &m.instances)
+	if err := json.Unmarshal(raw, &m.instances); err != nil {
+		m.instances = nil
+		return m, fsutil.SetAsideDamaged(m.path, err)
+	}
+	return m, nil
 }
 
 func (m *Manager) saveLocked() error {
@@ -157,15 +162,19 @@ func (m *Manager) Delete(id string, files bool) error {
 		return fmt.Errorf("stop the server first (it is %s)", strings.ToLower(st.String()))
 	}
 
-	m.mu.Lock()
-	var dir string
-	m.instances = slices.DeleteFunc(m.instances, func(x Instance) bool {
-		if x.ID == id {
-			dir = x.Dir
-			return true
+	in, ok := m.Get(id)
+	if !ok {
+		return fmt.Errorf("unknown server %q", id)
+	}
+	if files {
+		if err := checkServerDir(in); err != nil {
+			return err
 		}
-		return false
-	})
+	}
+
+	m.mu.Lock()
+	dir := in.Dir
+	m.instances = slices.DeleteFunc(m.instances, func(x Instance) bool { return x.ID == id })
 	delete(m.runners, id)
 	err := m.saveLocked()
 	m.mu.Unlock()
@@ -174,6 +183,31 @@ func (m *Manager) Delete(id string, files bool) error {
 		err = os.RemoveAll(dir)
 	}
 	return err
+}
+
+// checkServerDir refuses to delete folders that don't look like a dedicated
+// server install (e.g. an existing folder picked as the location by mistake).
+func checkServerDir(in Instance) error {
+	dir := filepath.Clean(in.Dir)
+	if home, err := os.UserHomeDir(); err == nil && dir == filepath.Clean(home) {
+		return fmt.Errorf("refusing to delete your home folder %s", dir)
+	}
+	if filepath.Dir(dir) == dir {
+		return fmt.Errorf("refusing to delete %s", dir)
+	}
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) || (err == nil && len(entries) == 0) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	if in.Installed() {
+		return nil
+	}
+	if st, err := os.Stat(filepath.Join(dir, "garrysmod")); err == nil && st.IsDir() {
+		return nil
+	}
+	return fmt.Errorf("refusing to delete %s: it doesn't look like a Garry's Mod server folder (no srcds or garrysmod/ inside); remove the server without deleting files, then delete the folder yourself", dir)
 }
 
 // Runner returns the runner of an instance, creating it on first use.

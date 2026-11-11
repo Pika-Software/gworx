@@ -76,20 +76,26 @@ func TestLauncher(t *testing.T) {
 }
 
 func TestValidate(t *testing.T) {
-	bad := []func(*Instance){
-		func(i *Instance) { i.Name = " " },
-		func(i *Instance) { i.Gamemode = "two words" },
-		func(i *Instance) { i.Map = "" },
-		func(i *Instance) { i.Port = 70000 },
-		func(i *Instance) { i.MaxPlayers = 0 },
-		func(i *Instance) { i.Developer = 3 },
-		func(i *Instance) { i.ExtraArgs = `"open` },
+	if in := NewInstance("ok", "/srv"); in.Validate() != nil {
+		t.Fatalf("defaults must be valid: %v", in.Validate())
 	}
-	for n, mod := range bad {
+	for name, mod := range map[string]func(*Instance){
+		"blank name":        func(i *Instance) { i.Name = " " },
+		"no folder":         func(i *Instance) { i.Dir = "" },
+		"two-word gamemode": func(i *Instance) { i.Gamemode = "two words" },
+		"no map":            func(i *Instance) { i.Map = "" },
+		"branch spaces":     func(i *Instance) { i.Branch = "x 86" },
+		"port too high":     func(i *Instance) { i.Port = 70000 },
+		"0 players":         func(i *Instance) { i.MaxPlayers = 0 },
+		"129 players":       func(i *Instance) { i.MaxPlayers = 129 },
+		"tickrate 0":        func(i *Instance) { i.Tickrate = 0 },
+		"developer 3":       func(i *Instance) { i.Developer = 3 },
+		"unterminated arg":  func(i *Instance) { i.ExtraArgs = `"open` },
+	} {
 		in := NewInstance("ok", "/srv")
 		mod(&in)
 		if in.Validate() == nil {
-			t.Errorf("case %d: expected a validation error", n)
+			t.Errorf("%s: expected a validation error", name)
 		}
 	}
 }
@@ -120,6 +126,11 @@ func TestManager(t *testing.T) {
 	if err := m.Update(b); err != nil {
 		t.Fatal(err)
 	}
+	renamed := b
+	renamed.Name = "MY SERVER"
+	if err := m.Update(renamed); err == nil {
+		t.Error("update must not take another server's name")
+	}
 
 	// reload from disk
 	m2, err := Open(cfgDir, func() Settings { return Settings{} })
@@ -142,5 +153,46 @@ func TestManager(t *testing.T) {
 	}
 	if len(m2.Instances()) != 1 {
 		t.Errorf("instances after delete: %d", len(m2.Instances()))
+	}
+}
+
+func TestDeleteFilesRefusesForeignFolder(t *testing.T) {
+	m, err := Open(t.TempDir(), func() Settings { return Settings{} })
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	foreign := t.TempDir()
+	keep := filepath.Join(foreign, "notes.txt")
+	if err := os.WriteFile(keep, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	in, err := m.Create(NewInstance("Foreign", foreign))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Delete(in.ID, true); err == nil {
+		t.Fatal("deleting a folder that isn't a server install must be refused")
+	}
+	if _, err := os.Stat(keep); err != nil {
+		t.Fatalf("foreign file was removed: %v", err)
+	}
+	if _, ok := m.Get(in.ID); !ok {
+		t.Fatal("instance must be kept when the delete is refused")
+	}
+
+	server := filepath.Join(t.TempDir(), "srv")
+	if err := os.MkdirAll(filepath.Join(server, "garrysmod"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	in2, err := m.Create(NewInstance("Real", server))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Delete(in2.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(server); !os.IsNotExist(err) {
+		t.Fatalf("server folder still exists: %v", err)
 	}
 }

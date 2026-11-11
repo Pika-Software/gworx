@@ -7,10 +7,9 @@ import (
 	"strings"
 
 	"fyne.io/fyne/v2/theme"
-)
 
-// Matches any CSI/OSC/charset ANSI sequence.
-var ansiAllRe = regexp.MustCompile(`\x1b\][^\x07]*\x07|\x1b[()][A-Z0-9]|\x1b\[[0-9;?]*[A-Za-z]`)
+	"github.com/Pika-Software/gworx/internal/ansi"
+)
 
 // ansiSGRRe finds SGR color sequences (\x1b[...m).
 var ansiSGRRe = regexp.MustCompile(`\x1b\[([0-9;]*)m`)
@@ -21,7 +20,7 @@ type ansiSpan struct {
 }
 
 func stripANSI(s string) string {
-	return ansiAllRe.ReplaceAllString(s, "")
+	return ansi.Strip(s)
 }
 
 // parseANSI splits s into spans using SGR color codes. Other ANSI is stripped.

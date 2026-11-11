@@ -24,25 +24,49 @@ import (
 //
 // The library is loaded at runtime with purego, so no cgo or SDK headers are needed.
 type Steamworks struct {
-	// LibPath overrides the steam_api library (default: FindSteamAPI).
-	LibPath string
 	// StagingDir is where upload content folders are created ("" = system temp).
 	StagingDir string
 
 	startOnce sync.Once
 	jobs      chan func()
 
-	api     *steamAPI
+	api *steamAPI // only used on the Steam thread
+
+	// mu guards the fields below, which are shared with other goroutines.
+	mu      sync.Mutex
+	libPath string
 	loaded  string
 	persona string
 }
 
+// NewSteamworks returns a backend using the steam_api library at libPath
+// ("" = FindSteamAPI).
+func NewSteamworks(libPath, stagingDir string) *Steamworks {
+	return &Steamworks{libPath: libPath, StagingDir: stagingDir}
+}
+
 func (s *Steamworks) Name() string { return "steamworks" }
 
-func (s *Steamworks) CurrentUser() string { return s.persona }
+func (s *Steamworks) CurrentUser() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.persona
+}
 
 // Library returns the path of the loaded steam_api library ("" before the first use).
-func (s *Steamworks) Library() string { return s.loaded }
+func (s *Steamworks) Library() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.loaded
+}
+
+// SetLibPath changes the steam_api library ("" = FindSteamAPI). It has no
+// effect once the library has been loaded.
+func (s *Steamworks) SetLibPath(p string) {
+	s.mu.Lock()
+	s.libPath = p
+	s.mu.Unlock()
+}
 
 // callback ids (k_iSteamUtilsCallbacks = 700, k_iSteamUGCCallbacks = 3400)
 const (
@@ -291,7 +315,9 @@ func findInterface(lib uintptr, prefix string) (uintptr, error) {
 
 // load opens the library and resolves every function. Errors are not retryable.
 func (s *Steamworks) load() (a *steamAPI, err error) {
-	path := s.LibPath
+	s.mu.Lock()
+	path := s.libPath
+	s.mu.Unlock()
 	if path == "" {
 		found := FindSteamAPI()
 		if len(found) == 0 {
@@ -362,7 +388,9 @@ func (s *Steamworks) load() (a *steamAPI, err error) {
 		return nil, err
 	}
 
+	s.mu.Lock()
 	s.loaded = path
+	s.mu.Unlock()
 	return a, nil
 }
 
@@ -443,10 +471,13 @@ func (s *Steamworks) connect(ctx context.Context, log Logger) error {
 			return errors.New("SteamAPI: failed to get the ISteamUGC/ISteamUser interfaces")
 		}
 		a.initialized = true
-		log("Connected to Steam through " + s.loaded)
+		log("Connected to Steam through " + s.Library())
 
 		if a.friends != 0 {
-			s.persona = a.getPersonaName(a.friends)
+			name := a.getPersonaName(a.friends)
+			s.mu.Lock()
+			s.persona = name
+			s.mu.Unlock()
 			// Shows up on the friends list as "In the Workshop", under Garry's Mod's status token
 			a.setRichPresence(a.friends, "steam_display", "#Status_Generic")
 			a.setRichPresence(a.friends, "generic", "the Workshop")
@@ -476,32 +507,38 @@ func (s *Steamworks) connect(ctx context.Context, log Logger) error {
 	return nil
 }
 
-// Close shuts the Steam API down.
+// closeTimeout bounds how long Close waits for a running Steam job.
+const closeTimeout = 5 * time.Second
+
+// Close shuts the Steam API down. If a job is still running (cancel it
+// first), Close gives up after closeTimeout so quitting never hangs.
 func (s *Steamworks) Close() {
-	if s.jobs == nil {
-		return
+	if s.Library() == "" {
+		return // never loaded
 	}
 	done := make(chan struct{})
-	s.jobs <- func() {
+	job := func() {
 		if s.api != nil && s.api.initialized {
 			s.api.shutdown()
 			s.api.initialized = false
 		}
 		close(done)
 	}
-	<-done
+	timeout := time.After(closeTimeout)
+	select {
+	case s.jobs <- job:
+	case <-timeout:
+		return
+	}
+	select {
+	case <-done:
+	case <-timeout:
+	}
 }
 
 // Initialized reports whether the Steam API has been loaded (the library path
 // can no longer change for this process once it has).
-func (s *Steamworks) Initialized() bool {
-	if s.jobs == nil {
-		return false
-	}
-	res := make(chan bool, 1)
-	s.jobs <- func() { res <- s.api != nil }
-	return <-res
-}
+func (s *Steamworks) Initialized() bool { return s.Library() != "" }
 
 // pump runs a callback frame and passes every queued callback to fn. The data
 // slice is only valid during the call.
@@ -747,7 +784,11 @@ func (s *Steamworks) Upload(ctx context.Context, req UploadRequest, log Logger, 
 		if req.Description != "" && !a.setItemDescription(a.ugc, h, req.Description) {
 			return errors.New("SetItemDescription failed (too long?)")
 		}
-		if !a.setItemVisibility(a.ugc, h, int32(req.Visibility)) {
+		vis := req.Visibility
+		if vis < 0 && req.ID == 0 {
+			vis = VisibilityPrivate
+		}
+		if vis >= 0 && !a.setItemVisibility(a.ugc, h, int32(vis)) {
 			return errors.New("SetItemVisibility failed")
 		}
 		if !a.setItemContent(a.ugc, h, content) {

@@ -12,10 +12,13 @@ type pipeRW struct {
 	io.WriteCloser
 }
 
-func startInteractive(cmd *exec.Cmd) (io.ReadWriteCloser, error) {
+// startInteractive runs cmd with piped stdin/stdout. The returned wait
+// function must be used instead of cmd.Wait (which is already called here to
+// close the output pipe once the process exits).
+func startInteractive(cmd *exec.Cmd) (io.ReadWriteCloser, func() error, error) {
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	pr, pw := io.Pipe()
@@ -23,13 +26,14 @@ func startInteractive(cmd *exec.Cmd) (io.ReadWriteCloser, error) {
 	cmd.Stderr = pw
 
 	if err := cmd.Start(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
+	done := make(chan error, 1)
 	go func() {
-		cmd.Wait()
+		done <- cmd.Wait()
 		pw.Close()
 	}()
 
-	return pipeRW{Reader: pr, WriteCloser: stdin}, nil
+	return pipeRW{Reader: pr, WriteCloser: stdin}, func() error { return <-done }, nil
 }

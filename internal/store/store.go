@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Pika-Software/gworx/internal/fsutil"
 	"github.com/Pika-Software/gworx/internal/gmaops"
 )
 
@@ -61,7 +62,11 @@ func Open(dir string) (*Store, error) {
 		return s, err
 	}
 
-	return s, json.Unmarshal(raw, &s.d)
+	if err := json.Unmarshal(raw, &s.d); err != nil {
+		s.d = data{}
+		return s, fsutil.SetAsideDamaged(s.path, err)
+	}
+	return s, nil
 }
 
 func (s *Store) saveLocked() error {
@@ -145,7 +150,9 @@ func (s *Store) GetPublished(id uint64) (Published, bool) {
 	return Published{}, false
 }
 
-// UpsertPublished stores rec; empty fields in rec keep their previous values.
+// UpsertPublished stores rec; empty fields in rec (and a negative Visibility,
+// meaning "unchanged") keep their previous values. A new record with a
+// negative Visibility stores it as unknown.
 func (s *Store) UpsertPublished(rec Published) error {
 	return s.modify(func(d *data) {
 		for i := range d.Published {
@@ -168,6 +175,9 @@ func (s *Store) UpsertPublished(rec Published) error {
 			}
 			if rec.Project == nil {
 				rec.Project = old.Project
+			}
+			if rec.Visibility < 0 {
+				rec.Visibility = old.Visibility
 			}
 			if rec.UpdatedAt.IsZero() {
 				rec.UpdatedAt = old.UpdatedAt

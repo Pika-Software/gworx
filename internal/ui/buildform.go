@@ -17,6 +17,7 @@ import (
 
 	"github.com/unknown-gd/go-gma"
 
+	"github.com/Pika-Software/gworx/internal/core"
 	"github.com/Pika-Software/gworx/internal/gmaops"
 	"github.com/Pika-Software/gworx/internal/workshop"
 )
@@ -95,7 +96,7 @@ func newBuildForm(a *App, withOutput bool) *buildForm {
 	}
 	if withOutput {
 		items = append(items, widget.NewFormItem("Output GMA", a.pathEntry(f.output, true, nil, func(dir string) {
-			name := slug(f.title.Text) + ".gma"
+			name := core.Slug(f.title.Text) + ".gma"
 			f.output.SetText(filepath.Join(dir, name))
 		})))
 	}
@@ -290,11 +291,11 @@ func (f *buildForm) scan() {
 
 	included := make([]string, len(res.Included))
 	for i, e := range res.Included {
-		included[i] = fmt.Sprintf("%-10s %s", humanSize(e.Size), e.Internal)
+		included[i] = fmt.Sprintf("%-10s %s", core.HumanSize(e.Size), e.Internal)
 	}
 
 	acc := widget.NewAccordion(
-		widget.NewAccordionItem(fmt.Sprintf("Included (%d, %s)", len(res.Included), humanSize(res.TotalSize)), section(included)),
+		widget.NewAccordionItem(fmt.Sprintf("Included (%d, %s)", len(res.Included), core.HumanSize(res.TotalSize)), section(included)),
 		widget.NewAccordionItem(fmt.Sprintf("Ignored by wildcard (%d)", len(res.Ignored)), section(res.Ignored)),
 		widget.NewAccordionItem(fmt.Sprintf("Not allowed in GMA, will be skipped (%d)", len(res.Disallowed)), section(res.Disallowed)),
 	)
@@ -316,12 +317,6 @@ func (f *buildForm) toolbar() fyne.CanvasObject {
 	)
 }
 
-// buildTask builds the project inside a task.
-func (a *App) buildTask(t *task, p *gmaops.Project, out string) error {
-	_, err := a.svc.Build(p, out, t.reporter())
-	return err
-}
-
 type buildPage struct {
 	a    *App
 	form *buildForm
@@ -340,7 +335,8 @@ func (b *buildPage) run() {
 	out := b.form.outputPath(p)
 
 	b.a.runTask("Build GMA", func(t *task) error {
-		return b.a.buildTask(t, p, out)
+		_, err := b.a.svc.Build(p, out, t.reporter())
+		return err
 	}, func() {
 		d := dialog.NewCustomConfirm("Build complete", "Upload…", "Close",
 			wrapLabel("Created "+out), func(upload bool) {

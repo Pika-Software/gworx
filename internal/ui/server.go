@@ -15,6 +15,7 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
+	"github.com/Pika-Software/gworx/internal/core"
 	"github.com/Pika-Software/gworx/internal/server"
 )
 
@@ -103,7 +104,7 @@ func (p *serverPage) create() {
 		if strings.TrimSpace(n) == "" {
 			return filepath.Join(cfg.Servers(), "server")
 		}
-		return filepath.Join(cfg.Servers(), slug(n))
+		return filepath.Join(cfg.Servers(), core.Slug(n))
 	}
 
 	name := widget.NewEntry()
@@ -202,6 +203,7 @@ func newInstanceView(p *serverPage, in server.Instance) *instanceView {
 	v.status = widget.NewLabel("")
 	v.status.TextStyle.Bold = true
 	v.progress = widget.NewProgressBar()
+	v.progress.TextFormatter = func() string { return "" }
 	v.progress.Hide()
 	v.inf = widget.NewProgressBarInfinite()
 	v.inf.Hide()

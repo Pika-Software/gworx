@@ -14,6 +14,7 @@ import (
 
 var runGUI = func() error {
 	a := app.NewWithID("eu.p1ka.gworx")
+	a.Settings().SetTheme(ui.AppTheme())
 
 	w := a.NewWindow("GWorX - Garry's Mod Toolkit")
 

@@ -7,11 +7,12 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"regexp"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Pika-Software/gworx/internal/ansi"
 )
 
 // State of a server instance.
@@ -33,10 +34,6 @@ const (
 	maxConsoleLines = 5000
 	stopTimeout     = 20 * time.Second
 )
-
-// ansiDropRe strips cursor/erase/OSC sequences but keeps SGR color codes (\x1b[...m)
-// so the UI can render coloured console lines.
-var ansiDropRe = regexp.MustCompile(`\x1b\][^\x07]*\x07|\x1b[()][A-Z0-9]|\x1b\[[0-9;?]*[A-ln-z]`)
 
 // Runner owns the process and console of one instance.
 type Runner struct {
@@ -108,7 +105,7 @@ func (r *Runner) Print(line string) {
 
 // feed splits raw terminal output into console lines.
 func (r *Runner) feed(chunk string) {
-	r.partial += ansiDropRe.ReplaceAllString(chunk, "")
+	r.partial += ansi.StripKeepColor(chunk)
 	for {
 		i := strings.IndexAny(r.partial, "\r\n")
 		if i < 0 {
@@ -131,7 +128,11 @@ func (r *Runner) start(inst Instance, token, wrapper string) error {
 		return fmt.Errorf("server is %s", strings.ToLower(st.String()))
 	}
 	r.state = Starting
+	cb := r.onState
 	r.mu.Unlock()
+	if cb != nil {
+		cb(Starting)
+	}
 
 	fail := func(err error) error {
 		r.setState(Stopped)
@@ -150,7 +151,6 @@ func (r *Runner) start(inst Instance, token, wrapper string) error {
 	cmd.Dir = inst.Dir
 	cmd.Env = append(os.Environ(), "TERM=dumb")
 
-	r.setState(Starting)
 	r.Print("> " + inst.CommandLine(token, wrapper))
 
 	term, wait, err := startConsole(cmd)

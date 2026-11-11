@@ -8,7 +8,10 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"slices"
 	"sync"
+
+	"github.com/Pika-Software/gworx/internal/fsutil"
 )
 
 // Backend selects how GWorX talks to the Steam Workshop.
@@ -36,7 +39,17 @@ var DefaultIgnore = []string{
 	"addon.json",
 }
 
+// Config is the GWorX configuration. Its fields live in the embedded Settings
+// so Reload can replace them in one assignment.
 type Config struct {
+	Settings
+
+	mu   sync.Mutex
+	path string
+}
+
+// Settings are the values stored in config.json.
+type Settings struct {
 	Backend Backend `json:"backend"`
 
 	// steamcmd
@@ -64,9 +77,6 @@ type Config struct {
 	AutoExtract   bool     `json:"auto_extract"`
 	DefaultAuthor string   `json:"default_author"`
 	DefaultIgnore []string `json:"default_ignore"`
-
-	mu   sync.Mutex
-	path string
 }
 
 // Dir returns the directory holding GWorX config and database files.
@@ -89,14 +99,14 @@ func defaults() *Config {
 		author = u.Username
 	}
 
-	return &Config{
+	return &Config{Settings: Settings{
 		Backend:       BackendSteamworks,
 		ServerWrapper: defaultServerWrapper(),
 		DataDir:       filepath.Join(home, "gworx"),
 		AutoExtract:   true,
 		DefaultAuthor: author,
-		DefaultIgnore: append([]string(nil), DefaultIgnore...),
-	}
+		DefaultIgnore: slices.Clone(DefaultIgnore),
+	}}
 }
 
 // Load reads the config file, creating defaults if it does not exist.
@@ -112,18 +122,22 @@ func Load() (*Config, error) {
 	}
 
 	if err := json.Unmarshal(data, cfg); err != nil {
-		return cfg, err
+		fresh := defaults()
+		fresh.path = cfg.path
+		return fresh, fsutil.SetAsideDamaged(cfg.path, err)
 	}
-
-	if cfg.Backend != BackendSteamCMD && cfg.Backend != BackendSteamworks {
-		cfg.Backend = BackendSteamworks
-	}
-
-	if cfg.DataDir == "" {
-		cfg.DataDir = defaults().DataDir
-	}
-
+	cfg.normalize()
 	return cfg, nil
+}
+
+// normalize replaces invalid or missing values with defaults.
+func (c *Config) normalize() {
+	if c.Backend != BackendSteamCMD && c.Backend != BackendSteamworks {
+		c.Backend = BackendSteamworks
+	}
+	if c.DataDir == "" {
+		c.DataDir = defaults().DataDir
+	}
 }
 
 func (c *Config) Save() error {
@@ -161,31 +175,12 @@ func (c *Config) Reload() error {
 	if err := json.Unmarshal(data, fresh); err != nil {
 		return err
 	}
-	if fresh.Backend != BackendSteamCMD && fresh.Backend != BackendSteamworks {
-		fresh.Backend = BackendSteamworks
-	}
-	if fresh.DataDir == "" {
-		fresh.DataDir = defaults().DataDir
-	}
+	fresh.normalize()
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.Backend = fresh.Backend
-	c.SteamCMDPath = fresh.SteamCMDPath
-	c.SteamUsername = fresh.SteamUsername
-	c.AnonymousDownloads = fresh.AnonymousDownloads
-	c.SteamCMDInstallDir = fresh.SteamCMDInstallDir
-	c.SteamAPIPath = fresh.SteamAPIPath
-	c.WebAPIKey = fresh.WebAPIKey
-	c.SteamID64 = fresh.SteamID64
-	c.SteamAccountToken = fresh.SteamAccountToken
-	c.ServerWrapper = fresh.ServerWrapper
-	c.DataDir = fresh.DataDir
-	c.DownloadsDir = fresh.DownloadsDir
-	c.UploadsDir = fresh.UploadsDir
-	c.AutoExtract = fresh.AutoExtract
-	c.DefaultAuthor = fresh.DefaultAuthor
-	c.DefaultIgnore = append([]string(nil), fresh.DefaultIgnore...)
+	c.Settings = fresh.Settings
+	c.DefaultIgnore = slices.Clone(fresh.DefaultIgnore)
 	return nil
 }
 

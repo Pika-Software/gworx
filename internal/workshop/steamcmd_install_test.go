@@ -7,50 +7,25 @@ import (
 	"compress/gzip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
-func TestSteamCMDInDir(t *testing.T) {
-	dir := t.TempDir()
-	if got := SteamCMDInDir(dir); got != "" {
-		t.Fatalf("empty dir: got %q", got)
-	}
-	path := filepath.Join(dir, "steamcmd.sh")
-	if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if got := SteamCMDInDir(dir); got != path {
-		t.Fatalf("got %q, want %q", got, path)
-	}
-}
+type archiveEntry struct{ name, body string }
 
-func TestSafeJoin(t *testing.T) {
-	dir := t.TempDir()
-	ok, err := safeJoin(dir, "steamcmd.sh")
-	if err != nil || ok != filepath.Join(dir, "steamcmd.sh") {
-		t.Fatalf("ok path: %q %v", ok, err)
-	}
-	if _, err := safeJoin(dir, "../escape"); err == nil {
-		t.Fatal("expected error for ../escape")
-	}
-	if _, err := safeJoin(dir, "/etc/passwd"); err == nil {
-		t.Fatal("expected error for absolute path")
-	}
-}
-
-func TestExtractTarGzFile(t *testing.T) {
-	dir := t.TempDir()
-	archive := filepath.Join(dir, "in.tar.gz")
+func writeTarGz(t *testing.T, path string, entries []archiveEntry) {
+	t.Helper()
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
-	body := []byte("#!/bin/sh\necho ok\n")
-	hdr := &tar.Header{Name: "steamcmd.sh", Mode: 0o755, Size: int64(len(body))}
-	if err := tw.WriteHeader(hdr); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tw.Write(body); err != nil {
-		t.Fatal(err)
+	for _, e := range entries {
+		hdr := &tar.Header{Name: e.name, Mode: 0o755, Size: int64(len(e.body)), Typeflag: tar.TypeReg}
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(e.body)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := tw.Close(); err != nil {
 		t.Fatal(err)
@@ -58,47 +33,76 @@ func TestExtractTarGzFile(t *testing.T) {
 	if err := gz.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(archive, buf.Bytes(), 0o644); err != nil {
+	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
 		t.Fatal(err)
-	}
-	out := filepath.Join(dir, "out")
-	if err := os.MkdirAll(out, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := extractTarGzFile(archive, out); err != nil {
-		t.Fatal(err)
-	}
-	if SteamCMDInDir(out) == "" {
-		t.Fatal("steamcmd.sh missing after extract")
 	}
 }
 
-func TestExtractZipFile(t *testing.T) {
-	dir := t.TempDir()
-	archive := filepath.Join(dir, "in.zip")
+func writeZip(t *testing.T, path string, entries []archiveEntry) {
+	t.Helper()
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
-	w, err := zw.Create("steamcmd.exe")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := w.Write([]byte("MZ")); err != nil {
-		t.Fatal(err)
+	for _, e := range entries {
+		w, err := zw.Create(e.name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write([]byte(e.body)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := zw.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(archive, buf.Bytes(), 0o644); err != nil {
+	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	out := filepath.Join(dir, "out")
-	if err := os.MkdirAll(out, 0o755); err != nil {
-		t.Fatal(err)
+}
+
+func TestExtractArchives(t *testing.T) {
+	formats := []struct {
+		name    string
+		write   func(*testing.T, string, []archiveEntry)
+		extract func(string, string) error
+	}{
+		{"tar.gz", writeTarGz, extractTarGzFile},
+		{"zip", writeZip, extractZipFile},
 	}
-	if err := extractZipFile(archive, out); err != nil {
-		t.Fatal(err)
+
+	unsafe := []string{"../escape", "linux32/../../escape"}
+	if runtime.GOOS != "windows" {
+		unsafe = append(unsafe, "/tmp/escape")
 	}
-	if SteamCMDInDir(out) == "" {
-		t.Fatal("steamcmd.exe missing after extract")
+
+	for _, f := range formats {
+		t.Run(f.name, func(t *testing.T) {
+			dir := t.TempDir()
+			archive := filepath.Join(dir, "in."+f.name)
+			out := filepath.Join(dir, "out")
+			f.write(t, archive, []archiveEntry{
+				{"steamcmd.sh", "#!/bin/sh\n"},
+				{"linux32/steamcmd", "ELF"},
+			})
+			if err := f.extract(archive, out); err != nil {
+				t.Fatal(err)
+			}
+			if got := SteamCMDInDir(out); got != filepath.Join(out, "steamcmd.sh") {
+				t.Errorf("SteamCMDInDir = %q", got)
+			}
+			if b, err := os.ReadFile(filepath.Join(out, "linux32", "steamcmd")); err != nil || string(b) != "ELF" {
+				t.Errorf("nested file = %q, %v", b, err)
+			}
+
+			for _, name := range unsafe {
+				out := filepath.Join(dir, "unsafe", "out")
+				f.write(t, archive, []archiveEntry{{name, "x"}})
+				if err := f.extract(archive, out); err == nil {
+					t.Errorf("%q: expected an error", name)
+				}
+				if _, err := os.Stat(filepath.Join(dir, "unsafe", "escape")); !os.IsNotExist(err) {
+					t.Errorf("%q escaped the destination", name)
+				}
+			}
+		})
 	}
 }

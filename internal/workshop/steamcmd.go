@@ -12,6 +12,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/Pika-Software/gworx/internal/ansi"
+	"github.com/Pika-Software/gworx/internal/fsutil"
 )
 
 // SteamCMD implements Backend by driving the steamcmd command line tool.
@@ -28,9 +31,13 @@ type SteamCMD struct {
 	// Anonymous forces anonymous logins for downloads.
 	Anonymous bool
 	Prompt    Prompter
-
-	mu sync.Mutex
 }
+
+// steamcmdMu allows one steamcmd process at a time: steamcmd locks its own
+// installation, and the core service creates a new SteamCMD value per call.
+var steamcmdMu sync.Mutex
+
+var errSteamCMDBusy = errors.New("steamcmd is already running another task (e.g. a server install); try again when it has finished")
 
 func (s *SteamCMD) Name() string        { return "steamcmd" }
 func (s *SteamCMD) CurrentUser() string { return s.User }
@@ -78,7 +85,6 @@ func (s *SteamCMD) exe() (string, error) {
 }
 
 var (
-	ansiRe  = regexp.MustCompile(`\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07`)
 	errorRe = regexp.MustCompile(`^ERROR[!( ]|FAILED \(|(?i:login failure)|(?i:invalid password)`)
 	dlOkRe  = regexp.MustCompile(`Success\. Downloaded item (\d+) to "([^"]+)"`)
 	vdfIDRe = regexp.MustCompile(`"publishedfileid"\s+"(\d+)"`)
@@ -102,8 +108,10 @@ func (o *runOutput) has(re *regexp.Regexp) []string {
 
 // run executes steamcmd with "+login <login> <cmds...> +quit" and answers credential prompts.
 func (s *SteamCMD) run(ctx context.Context, log Logger, login string, cmds ...string) (*runOutput, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	if !steamcmdMu.TryLock() {
+		return nil, errSteamCMDBusy
+	}
+	defer steamcmdMu.Unlock()
 
 	if log == nil {
 		log = func(string) {}
@@ -149,7 +157,7 @@ func (s *SteamCMD) run(ctx context.Context, log Logger, login string, cmds ...st
 	cmd := exec.CommandContext(ctx, prog, progArgs...)
 	cmd.Env = append(os.Environ(), "TERM=dumb")
 
-	term, err := startInteractive(cmd)
+	term, wait, err := startInteractive(cmd)
 	if err != nil {
 		return nil, fmt.Errorf("starting steamcmd: %w", err)
 	}
@@ -195,7 +203,7 @@ func (s *SteamCMD) run(ctx context.Context, log Logger, login string, cmds ...st
 	for {
 		n, rerr := term.Read(buf)
 		if n > 0 {
-			chunk := ansiRe.ReplaceAllString(string(buf[:n]), "")
+			chunk := ansi.Strip(string(buf[:n]))
 			pending += chunk
 
 			for {
@@ -237,7 +245,7 @@ func (s *SteamCMD) run(ctx context.Context, log Logger, login string, cmds ...st
 	}
 	emit(pending)
 
-	werr := cmd.Wait()
+	werr := wait()
 	if promptErr != nil {
 		return out, promptErr
 	}
@@ -379,30 +387,13 @@ func prepareContent(base, gmaPath string) (dir string, cleanup func(), err error
 	}
 
 	if err := os.Link(gmaPath, dst); err != nil {
-		if err := copyPlain(gmaPath, dst); err != nil {
+		if err := fsutil.CopyFile(gmaPath, dst); err != nil {
 			cleanup()
 			return "", nil, err
 		}
 	}
 
 	return tmp, cleanup, nil
-}
-
-func copyPlain(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	out, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		return err
-	}
-	return out.Close()
 }
 
 func (s *SteamCMD) Upload(ctx context.Context, req UploadRequest, log Logger, progress Progress) (uint64, error) {
@@ -446,7 +437,11 @@ func (s *SteamCMD) Upload(ctx context.Context, req UploadRequest, log Logger, pr
 		}
 		kv("previewfile", abs)
 	}
-	kv("visibility", strconv.Itoa(req.Visibility))
+	if vis := req.Visibility; vis >= 0 {
+		kv("visibility", strconv.Itoa(vis))
+	} else if req.ID == 0 {
+		kv("visibility", strconv.Itoa(VisibilityPrivate))
+	}
 	if req.Title != "" {
 		kv("title", req.Title)
 	}

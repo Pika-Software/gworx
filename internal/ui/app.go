@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"unicode/utf8"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -37,6 +38,9 @@ type App struct {
 	previews *previewCache
 
 	busy atomic.Bool
+	// cancelTask cancels the operation started by runTask (nil when idle).
+	taskMu     sync.Mutex
+	cancelTask context.CancelFunc
 
 	tabs         *container.AppTabs
 	workshopTabs *sideTabs
@@ -83,30 +87,45 @@ func (a *App) Shutdown() {
 	a.svc.Close()
 }
 
-// RequestClose closes the window, asking first when dedicated servers are running.
+// RequestClose closes the window, asking first when an operation or
+// dedicated servers are still running.
 func (a *App) RequestClose() {
-	n := a.svc.Servers.Running()
-	if n == 0 {
-		a.Shutdown()
-		a.win.Close()
+	var running []string
+	if a.busy.Load() {
+		running = append(running, "an operation is still running (it will be cancelled)")
+	}
+	if n := a.svc.Servers.Running(); n > 0 {
+		running = append(running, fmt.Sprintf("%d dedicated server(s) still running (they will be stopped)", n))
+	}
+	if len(running) == 0 {
+		a.quit()
 		return
 	}
-	dialog.ShowConfirm("Quit GWorX",
-		fmt.Sprintf("%d dedicated server(s) still running. Stop them and quit?", n),
-		func(ok bool) {
-			if !ok {
-				return
-			}
-			wait := dialog.NewCustomWithoutButtons("Stopping servers", widget.NewProgressBarInfinite(), a.win)
-			wait.Show()
-			go func() {
-				a.Shutdown()
-				fyne.Do(func() {
-					wait.Hide()
-					a.win.Close()
-				})
-			}()
-		}, a.win)
+	dialog.ShowConfirm("Quit GWorX", "Quit anyway?\n\n- "+strings.Join(running, "\n- "), func(ok bool) {
+		if ok {
+			a.quit()
+		}
+	}, a.win)
+}
+
+// quit cancels the running task, stops servers and closes the window without
+// blocking the UI thread.
+func (a *App) quit() {
+	a.taskMu.Lock()
+	if a.cancelTask != nil {
+		a.cancelTask()
+	}
+	a.taskMu.Unlock()
+
+	wait := dialog.NewCustomWithoutButtons("Quitting", widget.NewProgressBarInfinite(), a.win)
+	wait.Show()
+	go func() {
+		a.Shutdown()
+		fyne.Do(func() {
+			wait.Hide()
+			a.win.Close()
+		})
+	}()
 }
 
 func (a *App) Content() fyne.CanvasObject {
@@ -221,18 +240,21 @@ func (a *App) runTask(title string, fn func(t *task) error, onSuccess func()) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	a.taskMu.Lock()
+	a.cancelTask = cancel
+	a.taskMu.Unlock()
 
 	status := widget.NewLabel("Working...")
 	status.Wrapping = fyne.TextWrapWord
 	bar := widget.NewProgressBar()
+	bar.TextFormatter = func() string { return "" }
 	bar.Hide()
 	inf := widget.NewProgressBarInfinite()
 
 	lv := newLogView()
-	logObj := lv.list
-	scroll := container.NewStack(logObj)
 
-	content := container.NewBorder(container.NewVBox(status, inf, bar), nil, nil, nil, scroll)
+	// Stack the two bars so show/hide doesn't jump the dialog layout.
+	content := container.NewBorder(container.NewVBox(status, container.NewStack(inf, bar)), nil, nil, nil, lv.list)
 
 	d := dialog.NewCustomWithoutButtons(title, content, a.win)
 	cancelBtn := widget.NewButtonWithIcon("Cancel", theme.CancelIcon(), func() {
@@ -285,6 +307,9 @@ func (a *App) runTask(title string, fn func(t *task) error, onSuccess func()) {
 	go func() {
 		err := fn(t)
 		cancel()
+		a.taskMu.Lock()
+		a.cancelTask = nil
+		a.taskMu.Unlock()
 		a.busy.Store(false)
 
 		if err != nil {
@@ -450,9 +475,13 @@ func (a *App) showError(err error) {
 	dialog.ShowError(err, a.win)
 }
 
-func slug(s string) string { return core.Slug(s) }
-
-func humanSize(n int64) string { return core.HumanSize(n) }
+// truncate shortens s to at most n runes, adding an ellipsis when cut.
+func truncate(s string, n int) string {
+	if utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	return string([]rune(s)[:n]) + "…"
+}
 
 func wrapLabel(s string) *widget.Label {
 	l := widget.NewLabel(s)

@@ -97,24 +97,32 @@
 
       # gworx with libsteam_api in $out/lib/gworx, where the Steamworks backend looks
       # for it (like nwmpublisher's /usr/lib/nwmpublisher).
+      # Repackages the gworx output instead of recompiling it. The binary is copied,
+      # not symlinked: FindSteamAPI resolves symlinks before looking in ../lib/gworx.
       mkGworxSteamworks =
         pkgs:
-        (mkGworx pkgs).overrideAttrs (old: {
-          pname = "gworx-steamworks";
-          # ship Valve's file unmodified
-          stripExclude = [ "lib/gworx/libsteam_api.so" ];
-          postInstall = (old.postInstall or "") + ''
+        let
+          gworx = mkGworx pkgs;
+        in
+        pkgs.runCommand "gworx-steamworks-${version}"
+          {
+            pname = "gworx-steamworks";
+            inherit version;
+            meta = gworx.meta // {
+              license = [
+                lib.licenses.mit
+                lib.licenses.unfreeRedistributable
+              ];
+            };
+          }
+          ''
+            cp -r ${gworx} $out
+            chmod -R u+w $out
+            # ship Valve's file unmodified
             install -Dm644 ${./third_party/steamworks}/${
               steamApiLib.${pkgs.stdenv.hostPlatform.system}
             }/libsteam_api.so $out/lib/gworx/libsteam_api.so
           '';
-          meta = old.meta // {
-            license = [
-              lib.licenses.mit
-              lib.licenses.unfreeRedistributable
-            ];
-          };
-        });
 
       # CLI-only build: no Fyne, no cgo, no X11/GL dependencies.
       mkGworxCli =
