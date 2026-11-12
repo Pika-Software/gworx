@@ -46,8 +46,8 @@ func TestPreviewFromGIFAnimated(t *testing.T) {
 func TestPreviewFromGIFSingleFrame(t *testing.T) {
 	var buf bytes.Buffer
 	err := gif.EncodeAll(&buf, &gif.GIF{
-		Image: []*image.Paletted{solidPaletted(8, 8, color.RGBA{R: 1, A: 255})},
-		Delay: []int{0},
+		Image:  []*image.Paletted{solidPaletted(8, 8, color.RGBA{R: 1, A: 255})},
+		Delay:  []int{0},
 		Config: image.Config{Width: 8, Height: 8},
 	})
 	if err != nil {
