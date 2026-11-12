@@ -351,7 +351,7 @@ func (s *settingsPage) object() fyne.CanvasObject {
 	revertBtn := widget.NewButtonWithIcon("Revert", theme.ContentUndoIcon(), func() { s.revert() })
 
 	body := container.NewVBox(
-		card("Workshop backend", "", framePad(s.backend)),
+		card("Workshop Backend", "", framePad(s.backend)),
 		s.steamcmdCard,
 		s.steamworksCard,
 		folders,

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/theme"
@@ -25,9 +24,10 @@ type minePage struct {
 	selected int
 	list     *widget.List
 	details  *widget.Label
-	image    *canvas.Image
+	desc     *descBox
+	image    *thumb
 	imageBox *fyne.Container
-	scroll   *container.Scroll
+	detail   *fyne.Container // image + meta on top, description fills the rest
 	actions  *fyne.Container
 }
 
@@ -48,7 +48,7 @@ func newMinePage(a *App) *minePage {
 			it := m.items[i]
 			row := o.(*fyne.Container)
 			box := row.Objects[0].(*fyne.Container)
-			setThumb(row.Objects[1].(*canvas.Image), m.preview(it))
+			setThumb(row.Objects[1].(*thumb), m.preview(it))
 			box.Objects[0].(*widget.Label).SetText(it.Title)
 			sub := fmt.Sprintf("%d", it.ID)
 			if !it.UpdatedAt.IsZero() {
@@ -67,10 +67,12 @@ func newMinePage(a *App) *minePage {
 	}
 
 	m.details = wrapLabel("")
+	m.desc = newDescBox(a, 800)
 	m.image = newThumb(192)
 	m.image.Hide()
 	m.imageBox = container.NewHBox(m.image)
-	m.scroll = container.NewVScroll(container.NewVBox(m.imageBox, m.details))
+	m.detail = container.NewBorder(container.NewVBox(m.imageBox, m.details), nil, nil, nil, m.desc.Entry())
+	m.desc.onChange = func() { m.detail.Refresh() }
 	m.actions = container.NewHBox()
 	a.previews.subscribe(func() {
 		m.list.Refresh()
@@ -81,10 +83,10 @@ func newMinePage(a *App) *minePage {
 }
 
 // preview prefers the local preview image used for the last upload.
-func (m *minePage) preview(it store.Published) fyne.Resource {
+func (m *minePage) preview(it store.Published) *preview {
 	if it.PreviewPath != "" {
-		if r := m.a.previews.file(it.PreviewPath); r != nil {
-			return r
+		if p := m.a.previews.file(it.PreviewPath); p != nil {
+			return p
 		}
 	}
 	return m.a.previews.workshop(it.ID)
@@ -94,12 +96,12 @@ func (m *minePage) showImage() {
 	it, ok := m.current()
 	if !ok {
 		m.image.Hide()
-		m.scroll.Refresh()
+		m.detail.Refresh()
 		return
 	}
 	setThumb(m.image, m.preview(it))
 	m.image.Show()
-	m.scroll.Refresh()
+	m.detail.Refresh()
 }
 
 func (m *minePage) current() (store.Published, bool) {
@@ -134,6 +136,8 @@ func (m *minePage) showDetails() {
 	it, ok := m.current()
 	if !ok {
 		m.details.SetText("Addons you upload with GWorX appear here. Use \"Refresh from Steam\" to import the ones you published before.")
+		m.desc.Set("")
+		m.detail.Refresh()
 		m.actions.Objects = nil
 		m.actions.Refresh()
 		return
@@ -153,10 +157,9 @@ func (m *minePage) showDetails() {
 	if it.GMAPath != "" {
 		fmt.Fprintf(&b, "Last GMA: %s\n", it.GMAPath)
 	}
-	if it.Description != "" {
-		fmt.Fprintf(&b, "\n%s", truncate(it.Description, 800))
-	}
 	m.details.SetText(b.String())
+	m.desc.Set(it.Description)
+	m.detail.Refresh()
 
 	update := widget.NewButtonWithIcon("Update…", theme.UploadIcon(), func() {
 		m.a.upload.loadPublished(it)
@@ -164,9 +167,14 @@ func (m *minePage) showDetails() {
 	})
 	update.Importance = widget.HighImportance
 
-	m.actions.Objects = []fyne.CanvasObject{
+	acts := []fyne.CanvasObject{
 		update,
 		widget.NewButtonWithIcon("Open on Workshop", theme.ComputerIcon(), func() { m.a.openURL(workshop.ItemURL(it.ID)) }),
+	}
+	if m.desc.Has() {
+		acts = append(acts, m.desc.Button())
+	}
+	acts = append(acts,
 		widget.NewButtonWithIcon("Delete from Workshop", theme.DeleteIcon(), func() { m.deleteItem(it) }),
 		widget.NewButtonWithIcon("Forget", theme.CancelIcon(), func() {
 			dialog.ShowConfirm("Forget addon", fmt.Sprintf("Remove %q from this list? The Workshop item is not touched.", it.Title), func(ok bool) {
@@ -177,7 +185,8 @@ func (m *minePage) showDetails() {
 				}
 			}, m.a.win)
 		}),
-	}
+	)
+	m.actions.Objects = acts
 	m.actions.Refresh()
 }
 
@@ -240,7 +249,7 @@ func (m *minePage) object() fyne.CanvasObject {
 	)
 
 	right := insetSides(container.NewBorder(nil, container.NewHScroll(m.actions), nil, nil,
-		greyPanel(m.scroll)))
+		greyPanel(m.detail)))
 	split := container.NewHSplit(m.list, right)
 	split.Offset = 0.4
 

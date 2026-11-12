@@ -26,6 +26,8 @@ func TestSplitArgs(t *testing.T) {
 func TestArgsAndToken(t *testing.T) {
 	in := NewInstance("x", t.TempDir())
 	in.Gamemode, in.Map, in.MaxPlayers, in.Port, in.Tickrate, in.Developer = "terrortown", "ttt_minecraft_b5", 24, 27016, 33, 1
+	in.WorkshopCollection = "https://steamcommunity.com/sharedfiles/filedetails/?id=123456789"
+	in.P2P = true
 	in.ExtraArgs = `+hostname "My TTT"`
 
 	args, err := in.Args("SECRET")
@@ -33,7 +35,10 @@ func TestArgsAndToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	joined := strings.Join(args, " ")
-	for _, want := range []string{"-port 27016", "-tickrate 33", "+maxplayers 24", "+gamemode terrortown", "+map ttt_minecraft_b5", "+developer 1", "+hostname My TTT", "+sv_setsteamaccount SECRET"} {
+	for _, want := range []string{
+		"-port 27016", "-tickrate 33", "+maxplayers 24", "+gamemode terrortown", "+map ttt_minecraft_b5",
+		"+developer 1", "+host_workshop_collection 123456789", "-p2p", "+hostname My TTT", "+sv_setsteamaccount SECRET",
+	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("args %q missing %q", joined, want)
 		}
@@ -90,6 +95,7 @@ func TestValidate(t *testing.T) {
 		"129 players":       func(i *Instance) { i.MaxPlayers = 129 },
 		"tickrate 0":        func(i *Instance) { i.Tickrate = 0 },
 		"developer 3":       func(i *Instance) { i.Developer = 3 },
+		"bad workshop id":   func(i *Instance) { i.WorkshopCollection = "not-an-id" },
 		"unterminated arg":  func(i *Instance) { i.ExtraArgs = `"open` },
 	} {
 		in := NewInstance("ok", "/srv")

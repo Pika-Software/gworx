@@ -20,6 +20,7 @@ type Download struct {
 	ID            uint64    `json:"id"`
 	Title         string    `json:"title"`
 	Author        string    `json:"author,omitempty"`
+	Description   string    `json:"description,omitempty"`
 	GMAPath       string    `json:"gma_path"`
 	ExtractedPath string    `json:"extracted_path,omitempty"`
 	Size          int64     `json:"size"`

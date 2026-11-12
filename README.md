@@ -322,7 +322,8 @@ Each server's page has:
   every file. Run it after changing the branch.
 - **Open folder**: opens the server's location.
 - **Settings**: branch, gamemode, level, max players, port, tickrate,
-  `developer` (0/1/2) and extra arguments. **Startup command** shows the exact
+  `developer` (0/1/2), Workshop collection (`+host_workshop_collection`),
+  P2P (`-p2p`), and extra arguments. **Startup command** shows the exact
   command line. Changes are saved when you start or restart the server.
 - **Console**: live server output. Type a command and press Enter (or
   **Send**).

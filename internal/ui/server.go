@@ -184,10 +184,11 @@ type instanceView struct {
 	startBtn, stopBtn, restartBtn, installBtn, deleteBtn *widget.Button
 	validate                                             *widget.Check
 
-	name, dir, extra           *widget.Entry
+	name, dir, workshop, extra *widget.Entry
 	branch, gamemode, level    *widget.SelectEntry
 	maxPlayers, port, tickrate *widget.Entry
 	developer                  *widget.Select
+	p2p                        *widget.Check
 	command                    *widget.Label
 	tokenNote                  *widget.Label
 	saveBtn                    *widget.Button
@@ -227,8 +228,11 @@ func newInstanceView(p *serverPage, in server.Instance) *instanceView {
 	v.port = numberEntry()
 	v.tickrate = numberEntry()
 	v.developer = widget.NewSelect([]string{"0", "1", "2"}, nil)
+	v.workshop = widget.NewEntry()
+	v.workshop.SetPlaceHolder("Collection ID or Workshop link")
+	v.p2p = widget.NewCheck("Enable P2P (-p2p)", nil)
 	v.extra = widget.NewEntry()
-	v.extra.SetPlaceHolder("+host_workshop_collection 123456 -p2p ...")
+	v.extra.SetPlaceHolder("+hostname \"My Server\" +sv_password secret")
 	v.command = widget.NewLabel("")
 	v.command.TextStyle.Monospace = true
 	v.command.Wrapping = fyne.TextWrapBreak
@@ -239,13 +243,14 @@ func newInstanceView(p *serverPage, in server.Instance) *instanceView {
 	v.saveBtn = widget.NewButtonWithIcon("Save", theme.DocumentSaveIcon(), func() { v.save() })
 
 	v.load(in)
-	for _, e := range []*widget.Entry{v.name, v.dir, v.maxPlayers, v.port, v.tickrate, v.extra} {
+	for _, e := range []*widget.Entry{v.name, v.dir, v.maxPlayers, v.port, v.tickrate, v.workshop, v.extra} {
 		e.OnChanged = func(string) { v.preview() }
 	}
 	for _, e := range []*widget.SelectEntry{v.branch, v.gamemode, v.level} {
 		e.OnChanged = func(string) { v.preview() }
 	}
 	v.developer.OnChanged = func(string) { v.preview() }
+	v.p2p.OnChanged = func(bool) { v.preview() }
 
 	// console
 	v.console = newLogViewWith(false)
@@ -288,6 +293,8 @@ func (v *instanceView) load(in server.Instance) {
 	v.port.SetText(strconv.Itoa(in.Port))
 	v.tickrate.SetText(strconv.Itoa(in.Tickrate))
 	v.developer.SetSelected(strconv.Itoa(in.Developer))
+	v.workshop.SetText(in.WorkshopCollection)
+	v.p2p.SetChecked(in.P2P)
 	v.extra.SetText(in.ExtraArgs)
 	v.preview()
 }
@@ -308,6 +315,8 @@ func (v *instanceView) instance() server.Instance {
 	in.Port = atoi(v.port)
 	in.Tickrate = atoi(v.tickrate)
 	in.Developer, _ = strconv.Atoi(v.developer.Selected)
+	in.WorkshopCollection = strings.TrimSpace(v.workshop.Text)
+	in.P2P = v.p2p.Checked
 	in.ExtraArgs = v.extra.Text
 	return in
 }
@@ -506,6 +515,8 @@ func (v *instanceView) object() fyne.CanvasObject {
 		widget.NewFormItem("Port", v.port),
 		widget.NewFormItem("Tickrate", v.tickrate),
 		&widget.FormItem{Text: "developer", Widget: v.developer, HintText: "0 = off, 1/2 = more console output"},
+		&widget.FormItem{Text: "Workshop", Widget: v.workshop, HintText: "+host_workshop_collection — empty to skip"},
+		widget.NewFormItem("P2P", v.p2p),
 		&widget.FormItem{Text: "Extra args", Widget: v.extra, HintText: "Added to the command line as-is"},
 	)
 

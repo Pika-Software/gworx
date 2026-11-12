@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,7 +9,6 @@ import (
 	"time"
 
 	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/theme"
@@ -27,10 +27,13 @@ type historyPage struct {
 	selected int
 	list     *widget.List
 	details  *widget.Label
-	image    *canvas.Image
+	desc     *descBox
+	image    *thumb
 	imageBox *fyne.Container
-	scroll   *container.Scroll
+	detail   *fyne.Container // image + meta on top, description fills the rest
 	actions  *fyne.Container
+
+	descSeq int // cancels stale description fetches
 }
 
 func newHistoryPage(a *App) *historyPage {
@@ -50,7 +53,7 @@ func newHistoryPage(a *App) *historyPage {
 			it := h.items[i]
 			row := o.(*fyne.Container)
 			box := row.Objects[0].(*fyne.Container)
-			setThumb(row.Objects[1].(*canvas.Image), h.a.previews.workshop(it.ID))
+			setThumb(row.Objects[1].(*thumb), h.a.previews.workshop(it.ID))
 			title := it.Title
 			if title == "" {
 				title = fmt.Sprintf("Item %d", it.ID)
@@ -69,10 +72,12 @@ func newHistoryPage(a *App) *historyPage {
 	}
 
 	h.details = wrapLabel("")
+	h.desc = newDescBox(a, 800)
 	h.image = newThumb(192)
 	h.image.Hide()
 	h.imageBox = container.NewHBox(h.image)
-	h.scroll = container.NewVScroll(container.NewVBox(h.imageBox, h.details))
+	h.detail = container.NewBorder(container.NewVBox(h.imageBox, h.details), nil, nil, nil, h.desc.Entry())
+	h.desc.onChange = func() { h.detail.Refresh() }
 	a.previews.subscribe(func() {
 		h.list.Refresh()
 		h.showImage()
@@ -121,19 +126,22 @@ func (h *historyPage) showImage() {
 	it, ok := h.current()
 	if !ok {
 		h.image.Hide()
-		h.scroll.Refresh()
+		h.detail.Refresh()
 		return
 	}
 	setThumb(h.image, h.a.previews.workshop(it.ID))
 	h.image.Show()
-	h.scroll.Refresh()
+	h.detail.Refresh()
 }
 
 func (h *historyPage) showDetails() {
 	h.showImage()
 	it, ok := h.current()
 	if !ok {
+		h.descSeq++
 		h.details.SetText("Addons downloaded from the Workshop appear here.")
+		h.desc.Set("")
+		h.detail.Refresh()
 		h.actions.Objects = nil
 		h.actions.Refresh()
 		return
@@ -157,6 +165,11 @@ func (h *historyPage) showDetails() {
 		fmt.Fprintf(&b, "Extracted: %s%s\n", it.ExtractedPath, missing(it.ExtractedPath))
 	}
 	h.details.SetText(b.String())
+	h.desc.Set(it.Description)
+	h.detail.Refresh()
+	if it.Description == "" {
+		h.fetchDescription(it.ID)
+	}
 
 	var acts []fyne.CanvasObject
 	if exists(it.GMAPath) {
@@ -181,11 +194,42 @@ func (h *historyPage) showDetails() {
 			h.a.download.setID(it.ID)
 			h.a.showWorkshopTab(0)
 		}),
-		widget.NewButtonWithIcon("Remove", theme.DeleteIcon(), func() { h.remove(it) }),
 	)
+	if h.desc.Has() {
+		acts = append(acts, h.desc.Button())
+	}
+	acts = append(acts, widget.NewButtonWithIcon("Remove", theme.DeleteIcon(), func() { h.remove(it) }))
 
 	h.actions.Objects = acts
 	h.actions.Refresh()
+}
+
+// fetchDescription loads the Workshop description for older history entries that
+// were saved without one, and persists it for next time.
+func (h *historyPage) fetchDescription(id uint64) {
+	h.descSeq++
+	seq := h.descSeq
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		items, err := workshop.GetDetails(ctx, id)
+		fyne.Do(func() {
+			if seq != h.descSeq {
+				return
+			}
+			cur, ok := h.current()
+			if !ok || cur.ID != id {
+				return
+			}
+			if err != nil || len(items) == 0 || items[0].Description == "" {
+				return
+			}
+			desc := items[0].Description
+			cur.Description = desc
+			_ = h.a.store.AddDownload(cur) // OnChange reloads history and shows Copy
+		})
+	}()
 }
 
 func (h *historyPage) remove(it store.Download) {
@@ -224,7 +268,7 @@ func (h *historyPage) object() fyne.CanvasObject {
 	)
 
 	right := insetSides(container.NewBorder(nil, container.NewHScroll(h.actions), nil, nil,
-		greyPanel(h.scroll)))
+		greyPanel(h.detail)))
 	split := container.NewHSplit(h.list, right)
 	split.Offset = 0.4
 

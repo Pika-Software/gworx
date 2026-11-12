@@ -171,9 +171,10 @@ type DownloadOptions struct {
 func (s *Service) Download(ctx context.Context, id uint64, opt DownloadOptions, r Reporter) (store.Download, error) {
 	be := s.Backend()
 
-	title := ""
+	title, description := "", ""
 	if items, err := workshop.GetDetails(ctx, id); err == nil {
 		title = items[0].Title
+		description = items[0].Description
 		r.log("Item: " + title)
 	} else {
 		r.log("Web API: " + err.Error())
@@ -204,6 +205,7 @@ func (s *Service) Download(ctx context.Context, id uint64, opt DownloadOptions, 
 		ID:           id,
 		Title:        title,
 		Author:       inf.Author,
+		Description:  description,
 		GMAPath:      gmaPath,
 		DownloadedAt: time.Now(),
 	}

@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+
+	"github.com/Pika-Software/gworx/internal/workshop"
 )
 
 // AppID is the Garry's Mod Dedicated Server.
@@ -27,17 +29,19 @@ var (
 
 // Instance is one dedicated server installation.
 type Instance struct {
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	Dir        string `json:"dir"`
-	Branch     string `json:"branch"`
-	Gamemode   string `json:"gamemode"`
-	Map        string `json:"map"`
-	MaxPlayers int    `json:"max_players"`
-	Port       int    `json:"port"`
-	Tickrate   int    `json:"tickrate"`
-	Developer  int    `json:"developer"`
-	ExtraArgs  string `json:"extra_args,omitempty"`
+	ID                 string `json:"id"`
+	Name               string `json:"name"`
+	Dir                string `json:"dir"`
+	Branch             string `json:"branch"`
+	Gamemode           string `json:"gamemode"`
+	Map                string `json:"map"`
+	MaxPlayers         int    `json:"max_players"`
+	Port               int    `json:"port"`
+	Tickrate           int    `json:"tickrate"`
+	Developer          int    `json:"developer"`
+	WorkshopCollection string `json:"workshop_collection,omitempty"` // +host_workshop_collection
+	P2P                bool   `json:"p2p,omitempty"`                 // -p2p
+	ExtraArgs          string `json:"extra_args,omitempty"`
 }
 
 // NewInstance returns an instance with the usual defaults.
@@ -75,8 +79,24 @@ func (i *Instance) Validate() error {
 	case i.Developer < 0 || i.Developer > 2:
 		return errors.New("developer must be 0, 1 or 2")
 	}
+	if _, err := i.workshopCollectionID(); err != nil {
+		return err
+	}
 	_, err := SplitArgs(i.ExtraArgs)
 	return err
+}
+
+// workshopCollectionID returns the numeric collection id, or "" when unset.
+func (i *Instance) workshopCollectionID() (string, error) {
+	s := strings.TrimSpace(i.WorkshopCollection)
+	if s == "" {
+		return "", nil
+	}
+	id, err := workshop.ParseID(s)
+	if err != nil {
+		return "", fmt.Errorf("workshop collection: %w", err)
+	}
+	return strconv.FormatUint(id, 10), nil
 }
 
 // Installed reports whether the server files are present.
@@ -127,6 +147,14 @@ func (i *Instance) Args(token string) ([]string, error) {
 		"+map", i.Map,
 		"+developer", strconv.Itoa(i.Developer),
 	)
+	if collection, err := i.workshopCollectionID(); err != nil {
+		return nil, err
+	} else if collection != "" {
+		args = append(args, "+host_workshop_collection", collection)
+	}
+	if i.P2P {
+		args = append(args, "-p2p")
+	}
 	args = append(args, extra...)
 	if token = strings.TrimSpace(token); token != "" {
 		args = append(args, "+sv_setsteamaccount", token)

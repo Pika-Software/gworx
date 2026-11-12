@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/theme"
@@ -26,10 +25,11 @@ type downloadPage struct {
 
 	input   *widget.Entry
 	extract *widget.Check
-	preview *canvas.Image
+	preview *thumb
 	title   *widget.Label
 	meta    *widget.Label
-	desc    *widget.Label
+	desc    *descBox
+	body    *fyne.Container
 
 	infoSeq int
 	shownID uint64
@@ -56,8 +56,14 @@ func newDownloadPage(a *App) *downloadPage {
 	d.title = widget.NewLabel("")
 	d.title.TextStyle.Bold = true
 	d.title.Wrapping = fyne.TextWrapWord
+	d.title.Selectable = true
 	d.meta = wrapLabel("Paste a Workshop link or ID and press Enter to see the addon.")
-	d.desc = wrapLabel("")
+	d.desc = newDescBox(a, 1500)
+	d.desc.onChange = func() {
+		if d.body != nil {
+			d.body.Refresh()
+		}
+	}
 
 	return d
 }
@@ -79,7 +85,7 @@ func (d *downloadPage) fetchInfo() {
 	seq := d.infoSeq
 	d.title.SetText(fmt.Sprintf("Loading %d...", id))
 	d.meta.SetText("")
-	d.desc.SetText("")
+	d.desc.Set("")
 	d.shownID = id
 	setThumb(d.preview, d.a.previews.workshop(id))
 	d.preview.Show()
@@ -114,8 +120,10 @@ func (d *downloadPage) fetchInfo() {
 				fmt.Fprintf(&b, "\nTags: %s", strings.Join(it.Tags, ", "))
 			}
 			d.meta.SetText(b.String())
-
-			d.desc.SetText(truncate(it.Description, 1500))
+			d.desc.Set(it.Description)
+			if d.body != nil {
+				d.body.Refresh()
+			}
 		})
 	}()
 }
@@ -174,6 +182,8 @@ func (d *downloadPage) object() fyne.CanvasObject {
 
 	card := container.NewBorder(nil, nil, container.NewVBox(d.preview), nil,
 		container.NewVBox(d.title, d.meta))
+	descHead := container.NewBorder(nil, nil, nil, d.desc.Button(), widget.NewLabel("Description"))
+	d.body = container.NewBorder(container.NewVBox(card, descHead), nil, nil, nil, d.desc.Entry())
 
-	return container.NewBorder(top, nil, nil, nil, container.NewVScroll(container.NewVBox(card, d.desc)))
+	return container.NewBorder(top, nil, nil, nil, d.body)
 }

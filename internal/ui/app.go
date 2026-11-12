@@ -486,5 +486,6 @@ func truncate(s string, n int) string {
 func wrapLabel(s string) *widget.Label {
 	l := widget.NewLabel(s)
 	l.Wrapping = fyne.TextWrapWord
+	l.Selectable = true
 	return l
 }
