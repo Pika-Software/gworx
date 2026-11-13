@@ -29,46 +29,46 @@ jobs:
   #     - run: go vet ./...
   #     - run: go test ./...
 
-  cli:
-    name: cli (${{ matrix.goos }}/${{ matrix.goarch }})
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { goos: linux, goarch: amd64 }
-          - { goos: linux, goarch: arm64 }
-          - { goos: windows, goarch: amd64 }
-          - { goos: windows, goarch: arm64 }
-          - { goos: darwin, goarch: amd64 }
-          - { goos: darwin, goarch: arm64 }
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-      - name: Version
-        run: echo "VERSION=$(.github/version.sh)" >> "$GITHUB_ENV"
-      - name: Build
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: "0"
-        run: |
-          name="gworx-cli-${VERSION}-${GOOS}-${GOARCH}"
-          ext=""; [ "$GOOS" = windows ] && ext=".exe"
-          mkdir -p "dist/$name"
-          go build -tags nogui -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o "dist/$name/gworx-cli$ext" .
-          .github/steam-api.sh "$GOOS" "$GOARCH" "dist/$name"
-          cp README.md LICENSE "dist/$name/"
-          cd dist
-          if [ "$GOOS" = windows ]; then zip -qr "$name.zip" "$name"; else tar -czf "$name.tar.gz" "$name"; fi
-          rm -r "$name"
-      - uses: actions/upload-artifact@v6
-        with:
-          name: cli-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: dist/*
-          if-no-files-found: error
+  # cli:
+  #   name: cli (${{ matrix.goos }}/${{ matrix.goarch }})
+  #   runs-on: ubuntu-latest
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       include:
+  #         - { goos: linux, goarch: amd64 }
+  #         - { goos: linux, goarch: arm64 }
+  #         - { goos: windows, goarch: amd64 }
+  #         - { goos: windows, goarch: arm64 }
+  #         - { goos: darwin, goarch: amd64 }
+  #         - { goos: darwin, goarch: arm64 }
+  #   steps:
+  #     - uses: actions/checkout@v5
+  #     - uses: actions/setup-go@v6
+  #       with:
+  #         go-version-file: go.mod
+  #     - name: Version
+  #       run: echo "VERSION=$(.github/version.sh)" >> "$GITHUB_ENV"
+  #     - name: Build
+  #       env:
+  #         GOOS: ${{ matrix.goos }}
+  #         GOARCH: ${{ matrix.goarch }}
+  #         CGO_ENABLED: "0"
+  #       run: |
+  #         name="gworx-cli-${VERSION}-${GOOS}-${GOARCH}"
+  #         ext=""; [ "$GOOS" = windows ] && ext=".exe"
+  #         mkdir -p "dist/$name"
+  #         go build -tags nogui -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o "dist/$name/gworx-cli$ext" .
+  #         .github/steam-api.sh "$GOOS" "$GOARCH" "dist/$name"
+  #         cp README.md LICENSE "dist/$name/"
+  #         cd dist
+  #         if [ "$GOOS" = windows ]; then zip -qr "$name.zip" "$name"; else tar -czf "$name.tar.gz" "$name"; fi
+  #         rm -r "$name"
+  #     - uses: actions/upload-artifact@v6
+  #       with:
+  #         name: cli-${{ matrix.goos }}-${{ matrix.goarch }}
+  #         path: dist/*
+  #         if-no-files-found: error
 
   gui:
     name: gui (${{ matrix.goos }}/${{ matrix.goarch }})
@@ -176,7 +176,7 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [cli, gui, nix, flatpak]
+    needs: [gui, nix, flatpak]
     runs-on: ubuntu-latest
     permissions:
       contents: write
