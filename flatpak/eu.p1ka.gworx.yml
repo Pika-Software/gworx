@@ -33,11 +33,11 @@ modules:
     build-commands:
       - |
         set -euo pipefail
-        ver=0.1.5
+        ver=0.1.6
         if [ -f .flatpak-version ]; then
           ver=$(cat .flatpak-version)
         fi
-        go build -trimpath -ldflags "-s -w -X main.version=${ver}" -o gworx .
+        go build -tags wayland -trimpath -ldflags "-s -w -X main.version=${ver}" -o gworx .
       - install -Dm755 gworx /app/bin/gworx
       - |
         set -euo pipefail

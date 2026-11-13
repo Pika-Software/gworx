@@ -23,7 +23,7 @@ jobs:
   #       with:
   #         go-version-file: go.mod
   #     - name: Install GUI dependencies
-  #       run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgl1-mesa-dev libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev libxxf86vm-dev libxkbcommon-dev pkg-config
+  #       run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgl1-mesa-dev libegl1-mesa-dev libwayland-dev libxkbcommon-dev libx11-dev pkg-config
   #     - name: Check formatting
   #       run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
   #     - run: go vet ./...
@@ -91,7 +91,9 @@ jobs:
           go-version-file: go.mod
       - name: Install GUI dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgl1-mesa-dev libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev libxxf86vm-dev libxkbcommon-dev pkg-config
+        # Wayland + EGL for Fyne/GLFW (-tags wayland). libx11-dev is only needed so
+        # go-gl can compile GLX headers; the binary uses Wayland at runtime.
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgl1-mesa-dev libegl1-mesa-dev libwayland-dev libxkbcommon-dev libx11-dev pkg-config
       - name: Version
         run: echo "VERSION=$(.github/version.sh)" >> "$GITHUB_ENV"
       - name: Build
@@ -100,12 +102,16 @@ jobs:
         run: |
           name="gworx-${VERSION}-${{ matrix.goos }}-${{ matrix.goarch }}"
           ext=""; ldflags="-s -w -X main.version=${VERSION}"
+          tags=""
           if [ "${{ matrix.goos }}" = windows ]; then
             # GUI subsystem: no console window. Use gworx-cli.exe for the command line.
             ext=".exe"; ldflags="$ldflags -H=windowsgui"
+          elif [ "${{ matrix.goos }}" = linux ]; then
+            # GLFW 3.3: Wayland (EGL) instead of X11/GLX. Avoids GLXFBConfig failures on NVIDIA+Wayland.
+            tags="-tags wayland"
           fi
           mkdir -p "dist/$name"
-          go build -trimpath -ldflags "$ldflags" -o "dist/$name/gworx$ext" .
+          go build $tags -trimpath -ldflags "$ldflags" -o "dist/$name/gworx$ext" .
           .github/steam-api.sh "${{ matrix.goos }}" "${{ matrix.goarch }}" "dist/$name"
           cp README.md LICENSE "dist/$name/"
           cd dist

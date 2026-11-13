@@ -79,17 +79,21 @@ chmod +x gworx-*-x86_64.AppImage
 The AppImage needs Linux user namespaces (enabled on most desktops). On non-NixOS
 systems the GUI may also need a working OpenGL driver from the host.
 
-**tarball**: the GUI build needs OpenGL and the X11 libraries. Most desktops
-already have them. If not, install them:
+**tarball**: the Linux GUI is built for **Wayland** (OpenGL via EGL). Most
+desktops already have the libraries. If not, install them:
 
 ```sh
 # Debian / Ubuntu
-sudo apt install libgl1 libx11-6 libxcursor1 libxrandr2 libxinerama1 libxi6 libxxf86vm1
+sudo apt install libgl1 libegl1 libwayland-client0 libwayland-cursor0 libwayland-egl1 libxkbcommon0
 # Fedora
-sudo dnf install mesa-libGL libX11 libXcursor libXrandr libXinerama libXi libXxf86vm
-# Arch
-sudo pacman -S mesa libx11 libxcursor libxrandr libxinerama libxi libxxf86vm
+sudo dnf install mesa-libGL mesa-libEGL libwayland-client libwayland-cursor libwayland-egl libxkbcommon
+# Arch / CachyOS
+sudo pacman -S mesa wayland libxkbcommon
 ```
+
+On a pure X11 session, either use a Wayland compositor, run under XWayland with
+a Wayland-capable stack, or build an X11 binary yourself (see
+[From source](#from-source)).
 
 Then unpack the archive and put the binary on your `PATH`:
 
@@ -189,11 +193,12 @@ The CLI only needs Go 1.26 or newer:
 CGO_ENABLED=0 go install -tags nogui github.com/Pika-Software/gworx@latest
 ```
 
-The GUI also needs a C compiler plus the OpenGL/X11 development headers
-(`libgl1-mesa-dev xorg-dev` on Debian/Ubuntu):
+The GUI also needs a C compiler plus OpenGL/Wayland development headers
+(`libgl1-mesa-dev libegl1-mesa-dev libwayland-dev libxkbcommon-dev libx11-dev`
+on Debian/Ubuntu; `libx11-dev` is only required to compile GL headers):
 
 ```sh
-go install github.com/Pika-Software/gworx@latest
+go install -tags wayland github.com/Pika-Software/gworx@latest
 ```
 
 ### From source
@@ -201,10 +206,17 @@ go install github.com/Pika-Software/gworx@latest
 ```sh
 git clone https://github.com/Pika-Software/gworx
 cd gworx
-go build .                                     # GUI + CLI -> ./gworx
+go build -tags wayland .                       # Linux GUI (Wayland/EGL) + CLI -> ./gworx
+go build .                                     # macOS/Windows GUI, or Linux X11/GLX
 CGO_ENABLED=0 go build -tags nogui -o gworx-cli .   # CLI only
 # or: nix build .#gworx / nix build .#gworx-cli
 ```
+
+On Linux, release builds and `nix build .#gworx` use `-tags wayland` so GLFW
+talks to Wayland with EGL instead of X11/GLX. That avoids startup failures like
+`GLX: Failed to find a suitable GLXFBConfig` on NVIDIA + Plasma/GNOME Wayland.
+Omit the tag (or use an X11 session) only if you need a GLX/X11 binary.
+GLFW 3.3 cannot enable Wayland and X11 in the same binary.
 
 ## Running
 
@@ -360,12 +372,14 @@ You can change the folders in **Settings** or with `gworx config set data_dir â€
 ## Development
 
 ```sh
-nix develop                              # Go, gcc and the GUI libraries
-go run .                                 # GUI
+nix develop                              # Go, gcc, Wayland GUI libs; sets GOFLAGS=-tags=wayland
+go run .                                 # GUI (Wayland on Linux)
 go run . download 104603291              # CLI
 go test ./...
 CGO_ENABLED=0 go build -tags nogui .     # CLI-only build
 ```
+
+Outside the Nix shell on Linux, pass the tag yourself: `go run -tags wayland .`.
 
 Code layout:
 

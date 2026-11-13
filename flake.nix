@@ -15,7 +15,7 @@
     }:
     let
       lib = nixpkgs.lib;
-      version = "0.1.5";
+      version = "0.1.6";
 
       systems = [
         "x86_64-linux"
@@ -43,16 +43,13 @@
       # Update with: nix build .#gworx 2>&1 | grep got:
       vendorHash = "sha256-HtWwa8Ww6bo1NQeE6xNs3EK8sZxAhZMu9liJYg+CuDM=";
 
-      # Libraries Fyne (GLFW) links against
+      # Libraries Fyne (GLFW) needs for -tags wayland.
+      # GLFW uses Wayland/EGL at runtime; libX11 remains a build dep because
+      # go-gl's GL loader still includes GLX headers on Linux.
       guiLibs =
         pkgs: with pkgs; [
           libGL
           libX11
-          libXcursor
-          libXrandr
-          libXinerama
-          libXi
-          libXxf86vm
           libxkbcommon
           wayland
         ];
@@ -71,6 +68,7 @@
           inherit version src vendorHash;
 
           subPackages = [ "." ];
+          tags = [ "wayland" ];
           ldflags = [
             "-s"
             "-w"
@@ -225,6 +223,8 @@
 
           shellHook = ''
             export CGO_ENABLED=1
+            # Match packaged Linux GUI builds (GLFW Wayland backend).
+            export GOFLAGS="''${GOFLAGS:+$GOFLAGS }-tags=wayland"
           '';
         };
       });
