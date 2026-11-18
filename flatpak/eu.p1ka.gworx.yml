@@ -15,6 +15,10 @@ finish-args:
   - --socket=wayland
   - --device=dri
   - --filesystem=home
+  # Workshop files live in whatever folder Steam uses, including libraries on
+  # other disks (/mnt/ssd1/..., /run/media/...). host:ro makes those readable.
+  # --filesystem=home stays read-write because it outranks host:ro.
+  - --filesystem=host:ro
   - --filesystem=xdg-run/steam:ro
   - --filesystem=~/.steam:ro
   - --filesystem=~/.local/share/Steam:ro

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"sync"
 	"time"
@@ -211,8 +210,6 @@ func steamAPIName() string {
 	return "libsteam_api.so"
 }
 
-var libraryPathRe = regexp.MustCompile(`"path"\s+"([^"]+)"`)
-
 // FindSteamAPI returns candidate steam_api libraries, best first: the one shipped
 // next to the gworx binary (or in ../lib/gworx for packages), then Garry's Mod installs.
 func FindSteamAPI() []string {
@@ -247,34 +244,7 @@ func FindSteamAPI() []string {
 }
 
 func findGModSteamAPI() []string {
-	home, _ := os.UserHomeDir()
-
-	var steamRoots []string
-	switch runtime.GOOS {
-	case "windows":
-		steamRoots = []string{`C:\Program Files (x86)\Steam`, `C:\Program Files\Steam`}
-	case "darwin":
-		steamRoots = []string{filepath.Join(home, "Library", "Application Support", "Steam")}
-	default:
-		steamRoots = []string{
-			filepath.Join(home, ".local", "share", "Steam"),
-			filepath.Join(home, ".steam", "steam"),
-			filepath.Join(home, ".steam", "root"),
-			filepath.Join(home, ".var", "app", "com.valvesoftware.Steam", ".local", "share", "Steam"),
-		}
-	}
-
-	var libs []string
-	for _, root := range steamRoots {
-		libs = append(libs, root)
-		raw, err := os.ReadFile(filepath.Join(root, "steamapps", "libraryfolders.vdf"))
-		if err != nil {
-			continue
-		}
-		for _, m := range libraryPathRe.FindAllStringSubmatch(string(raw), -1) {
-			libs = append(libs, filepath.FromSlash(string(bytes.ReplaceAll([]byte(m[1]), []byte(`\\`), []byte(`\`)))))
-		}
-	}
+	libs := steamLibraries(steamClientRoots())
 
 	var rel []string
 	switch runtime.GOOS {
@@ -631,6 +601,86 @@ func cString(b []byte) string {
 func nopLog(string)       {}
 func nopProgress(float64) {}
 
+func (a *steamAPI) itemReady(id uint64) bool {
+	st := a.getItemState(a.ugc, id)
+	return st&itemStateInstalled != 0 && st&(itemStateNeedsUpdate|itemStateDownloading|itemStatePending) == 0
+}
+
+func (a *steamAPI) itemFolder(id uint64) (string, error) {
+	var size uint64
+	var ts uint32
+	buf := make([]byte, 4096)
+	if !a.getItemInstallInfo(a.ugc, id, &size, &buf[0], uint32(len(buf)), &ts) {
+		return "", errors.New("item installed but Steam did not report its location")
+	}
+	folder := cString(buf)
+	if folder == "" {
+		return "", errors.New("item installed but Steam did not report its location")
+	}
+	return folder, nil
+}
+
+func (a *steamAPI) downloadItemFiles(ctx context.Context, id uint64, log Logger, progress Progress) error {
+	log(fmt.Sprintf("Requesting download of %d through Steam...", id))
+	if !a.downloadItem(a.ugc, id, true) {
+		// Already installed: nothing to fetch. The caller checks the folder.
+		if a.itemReady(id) {
+			return nil
+		}
+		return errors.New("Steam refused the download: Garry's Mod must be installed in this Steam client (or use the steamcmd backend), and the item must exist")
+	}
+
+	idOff := alignUp(4, 8)
+	var result error
+	finished := false
+	lastBytes, lastChange := uint64(0), time.Now()
+	lastLog := time.Time{}
+
+	for !finished {
+		a.pump(func(cb int32, data []byte) {
+			if cb != cbDownloadItemResult || len(data) < idOff+12 {
+				return
+			}
+			// DownloadItemResult_t { AppId_t app; PublishedFileId_t id; EResult result }
+			if binary.LittleEndian.Uint32(data[0:4]) != AppID || binary.LittleEndian.Uint64(data[idOff:idOff+8]) != id {
+				return
+			}
+			finished = true
+			result = eResultErr(int32(binary.LittleEndian.Uint32(data[idOff+8 : idOff+12])))
+		})
+		if result != nil {
+			return fmt.Errorf("download failed: %w", result)
+		}
+
+		var done, total uint64
+		if a.getItemDownloadInfo(a.ugc, id, &done, &total) && total > 0 {
+			progress(float64(done) / float64(total))
+			if done != lastBytes {
+				lastBytes, lastChange = done, time.Now()
+			}
+			if time.Since(lastLog) > 2*time.Second {
+				log(fmt.Sprintf("Downloading... %d / %d bytes", done, total))
+				lastLog = time.Now()
+			}
+		} else {
+			progress(-1)
+		}
+
+		if a.itemReady(id) {
+			break
+		}
+		if time.Since(lastChange) > stallTimeout {
+			return errors.New("download stalled (item may be private or removed)")
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	return nil
+}
+
 func (s *Steamworks) Download(ctx context.Context, id uint64, log Logger, progress Progress) (string, error) {
 	if log == nil {
 		log = nopLog
@@ -641,77 +691,45 @@ func (s *Steamworks) Download(ctx context.Context, id uint64, log Logger, progre
 	var folder string
 
 	err := s.do(ctx, log, func(a *steamAPI) error {
-		ready := func() bool {
-			st := a.getItemState(a.ugc, id)
-			return st&itemStateInstalled != 0 && st&(itemStateNeedsUpdate|itemStateDownloading|itemStatePending) == 0
-		}
-
-		if ready() {
+		// Steam can report "installed" after the files were removed. Download again
+		// in that case. A Flatpak that cannot see the library will not be fixed by
+		// another download (Steam writes to the same hidden path), so skip it.
+		downloaded := false
+		if a.itemReady(id) {
 			log(fmt.Sprintf("Item %d is already installed and up to date", id))
 		} else {
-			log(fmt.Sprintf("Requesting download of %d through Steam...", id))
-			if !a.downloadItem(a.ugc, id, true) {
-				return errors.New("Steam refused the download: Garry's Mod must be installed in this Steam client (or use the steamcmd backend), and the item must exist")
+			if err := a.downloadItemFiles(ctx, id, log, progress); err != nil {
+				return err
 			}
-
-			idOff := alignUp(4, 8)
-			var result error
-			finished := false
-			lastBytes, lastChange := uint64(0), time.Now()
-			lastLog := time.Time{}
-
-			for !finished {
-				a.pump(func(cb int32, data []byte) {
-					if cb != cbDownloadItemResult || len(data) < idOff+12 {
-						return
-					}
-					// DownloadItemResult_t { AppId_t app; PublishedFileId_t id; EResult result }
-					if binary.LittleEndian.Uint32(data[0:4]) != AppID || binary.LittleEndian.Uint64(data[idOff:idOff+8]) != id {
-						return
-					}
-					finished = true
-					result = eResultErr(int32(binary.LittleEndian.Uint32(data[idOff+8 : idOff+12])))
-				})
-				if result != nil {
-					return fmt.Errorf("download failed: %w", result)
-				}
-
-				var done, total uint64
-				if a.getItemDownloadInfo(a.ugc, id, &done, &total) && total > 0 {
-					progress(float64(done) / float64(total))
-					if done != lastBytes {
-						lastBytes, lastChange = done, time.Now()
-					}
-					if time.Since(lastLog) > 2*time.Second {
-						log(fmt.Sprintf("Downloading... %d / %d bytes", done, total))
-						lastLog = time.Now()
-					}
-				} else {
-					progress(-1)
-				}
-
-				if ready() {
-					break
-				}
-				if time.Since(lastChange) > stallTimeout {
-					return errors.New("download stalled (item may be private or removed)")
-				}
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				case <-time.After(100 * time.Millisecond):
-				}
-			}
+			downloaded = true
 		}
 
-		var size uint64
-		var ts uint32
-		buf := make([]byte, 4096)
-		if !a.getItemInstallInfo(a.ugc, id, &size, &buf[0], uint32(len(buf)), &ts) {
-			return errors.New("item installed but Steam did not report its location")
+		reported, err := a.itemFolder(id)
+		if err != nil {
+			return err
 		}
-		folder = cString(buf)
-		log("Steam stored the item at " + folder)
+		log("Steam stored the item at " + reported)
+
+		resolved, rerr := resolveInstallDir(reported)
+		if rerr != nil && !downloaded && !inFlatpak() {
+			log("That folder is not readable; asking Steam to download the item again")
+			if err := a.downloadItemFiles(ctx, id, log, progress); err != nil {
+				return err
+			}
+			reported, err = a.itemFolder(id)
+			if err != nil {
+				return err
+			}
+			log("Steam stored the item at " + reported)
+			resolved, rerr = resolveInstallDir(reported)
+		}
+		if rerr != nil {
+			return installPathError(reported, rerr)
+		}
+		if resolved != filepath.Clean(reported) {
+			log("Reading the addon from " + resolved)
+		}
+		folder = resolved
 		return nil
 	})
 	if err != nil {

@@ -172,13 +172,25 @@
             config.allowUnfreePredicate = p: lib.getName p == "gworx-steamworks";
           };
           gworx-steamworks = mkGworxSteamworks unfreePkgs;
+          # Nix's libEGL has no GPU driver outside NixOS (no /run/opengl-driver),
+          # so a bare AppImage dies with "EGL: Failed to get EGL display".
+          # The wrapper keeps Nix libc and then prefers the host GLVND stack.
+          gworx-appimage-program = pkgs.writeShellScript "gworx" ''
+            export GWORX_REAL=${lib.getExe gworx-steamworks}
+            export GWORX_NIX_LIB_PATH=${lib.makeLibraryPath [
+              pkgs.glibc
+              pkgs.stdenv.cc.cc
+              pkgs.libgcc
+            ]}
+            . ${./packaging/host-gl.sh}
+          '';
         in
         {
           inherit gworx gworx-steamworks;
           gworx-cli = mkGworxCli pkgs;
           # Bundles gworx-steamworks + its closure (including libsteam_api) into one AppImage.
           gworx-appimage = nix-appimage.lib.${system}.mkAppImage {
-            program = lib.getExe gworx-steamworks;
+            program = gworx-appimage-program;
             pname = "gworx";
             name = "gworx-${version}-${appImageArch.${system}}.AppImage";
           };

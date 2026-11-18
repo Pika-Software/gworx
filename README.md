@@ -68,6 +68,9 @@ flatpak install --user gworx-*-x86_64.flatpak
 flatpak run eu.p1ka.gworx
 ```
 
+The sandbox can read Steam library folders outside your home directory, including
+libraries on other disks. Downloads are still saved under your home folder.
+
 **AppImage** (includes the Steam API library): download
 `gworx-<ver>-x86_64.AppImage`, mark it executable, and run it:
 
@@ -76,8 +79,9 @@ chmod +x gworx-*-x86_64.AppImage
 ./gworx-*-x86_64.AppImage
 ```
 
-The AppImage needs Linux user namespaces (enabled on most desktops). On non-NixOS
-systems the GUI may also need a working OpenGL driver from the host.
+The AppImage needs Linux user namespaces (enabled on most desktops). Outside NixOS
+it loads the host OpenGL and EGL libraries so the window can open on Wayland.
+Those are the same runtime libraries as the tarball below.
 
 **tarball**: the Linux GUI is built for **Wayland** (OpenGL via EGL). Most
 desktops already have the libraries. If not, install them:
