@@ -15,7 +15,7 @@
     }:
     let
       lib = nixpkgs.lib;
-      version = "0.1.7";
+      version = "0.1.8";
 
       systems = [
         "x86_64-linux"

@@ -37,7 +37,7 @@ modules:
     build-commands:
       - |
         set -euo pipefail
-        ver=0.1.7
+        ver=0.1.8
         if [ -f .flatpak-version ]; then
           ver=$(cat .flatpak-version)
         fi
