@@ -67,22 +67,59 @@ func TestLauncher(t *testing.T) {
 	if in.Installed() {
 		t.Fatal("empty folder must not count as installed")
 	}
-	for _, n := range []string{"srcds_run", "srcds_run_x64"} {
-		os.WriteFile(filepath.Join(dir, n), []byte("#!/bin/sh\n"), 0o755)
+	for _, n := range []string{"srcds_linux", "srcds_linux64"} {
+		if err := os.WriteFile(filepath.Join(dir, n), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := in.launcher(); err == nil || !strings.Contains(err.Error(), "not installed") {
+		t.Fatalf("bare binaries must not count as installed: %v", err)
+	}
+	for _, n := range []string{"srcds_run", "srcds_run64"} {
+		if err := os.WriteFile(filepath.Join(dir, n), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 	in.Branch = "x86-64"
-	if exe, _ := in.launcher(); filepath.Base(exe) != "srcds_run_x64" {
-		t.Errorf("x86-64 branch uses %s", exe)
+	if exe, err := in.launcher(); err != nil || filepath.Base(exe) != "srcds_run" {
+		t.Fatalf("branch must not choose the entrypoint, got %s, %v", exe, err)
 	}
-	in.Branch = "public"
-	if exe, _ := in.launcher(); filepath.Base(exe) != "srcds_run" {
-		t.Errorf("public branch uses %s", exe)
+
+	in.Binary = "srcds_run64"
+	if exe, err := in.launcher(); err != nil || filepath.Base(exe) != "srcds_run64" {
+		t.Fatalf("explicit entrypoint = %s, %v", exe, err)
+	}
+	if args, err := in.Args(""); err != nil || !slices.Contains(args, "-norestart") {
+		t.Fatalf("srcds_run64 args = %v, %v", args, err)
+	}
+	if !strings.Contains(in.CommandLine("", ""), "srcds_run64") {
+		t.Fatal(in.CommandLine("", ""))
+	}
+
+	in.Binary = "srcds_linux"
+	if err := in.Validate(); err == nil {
+		t.Fatal("bare binary must be rejected")
+	}
+	if _, err := in.launcher(); err == nil {
+		t.Fatal("bare binary must not launch")
+	}
+
+	in.Binary = "srcds_missing"
+	if _, err := in.launcher(); err == nil || !strings.Contains(err.Error(), "srcds_run") {
+		t.Fatalf("unknown entrypoint: %v", err)
 	}
 }
 
 func TestValidate(t *testing.T) {
 	if in := NewInstance("ok", "/srv"); in.Validate() != nil {
 		t.Fatalf("defaults must be valid: %v", in.Validate())
+	}
+	if names := Entrypoints(); len(names) > 0 {
+		named := NewInstance("ok", "/srv")
+		named.Binary = names[len(names)-1]
+		if err := named.Validate(); err != nil {
+			t.Fatal(err)
+		}
 	}
 	for name, mod := range map[string]func(*Instance){
 		"blank name":        func(i *Instance) { i.Name = " " },
@@ -97,6 +134,8 @@ func TestValidate(t *testing.T) {
 		"developer 3":       func(i *Instance) { i.Developer = 3 },
 		"bad workshop id":   func(i *Instance) { i.WorkshopCollection = "not-an-id" },
 		"unterminated arg":  func(i *Instance) { i.ExtraArgs = `"open` },
+		"bare binary":       func(i *Instance) { i.Binary = "srcds_linux" },
+		"binary path":       func(i *Instance) { i.Binary = "bin/srcds_linux" },
 	} {
 		in := NewInstance("ok", "/srv")
 		mod(&in)
@@ -129,6 +168,11 @@ func TestManager(t *testing.T) {
 	}
 
 	b.Port = 27020
+	wantBinary := ""
+	if names := Entrypoints(); len(names) > 0 {
+		wantBinary = names[len(names)-1]
+	}
+	b.Binary = wantBinary
 	if err := m.Update(b); err != nil {
 		t.Fatal(err)
 	}
@@ -143,8 +187,8 @@ func TestManager(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := m2.Get(b.ID); got.Port != 27020 {
-		t.Errorf("persisted port = %d", got.Port)
+	if got, _ := m2.Get(b.ID); got.Port != 27020 || got.Binary != wantBinary {
+		t.Errorf("persisted instance = %+v", got)
 	}
 
 	if err := m2.Start(a.ID); err == nil || !strings.Contains(err.Error(), "not installed") {

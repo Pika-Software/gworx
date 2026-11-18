@@ -257,7 +257,7 @@ func (s *settingsPage) testSteamworks() {
 func (s *settingsPage) detectSteamAPI() {
 	found := workshop.FindSteamAPI()
 	if len(found) == 0 {
-		dialog.ShowInformation("Not found", "No steam_api library was found. Release builds ship it next to the gworx binary; Garry's Mod also has one (bin/win64, or bin/linux64 on the x86-64 branch). You can also pick it manually.", s.a.win)
+		dialog.ShowInformation("Not found", "No steam_api library was found. Release builds ship it next to the gworx binary; Garry's Mod also has one (bin/win64 or bin/linux64). You can also pick it manually.", s.a.win)
 		return
 	}
 	if len(found) == 1 {
@@ -335,7 +335,7 @@ func (s *settingsPage) object() fyne.CanvasObject {
 		&widget.FormItem{Text: "Steam Account Token", Widget: s.serverToken,
 			HintText: "Added as +sv_setsteamaccount. Create one at steamcommunity.com/dev/managegameservers (app 4000)"},
 		&widget.FormItem{Text: "Launch wrapper", Widget: s.serverWrapper,
-			HintText: "Command put in front of srcds_run and steamcmd (e.g. steam-run on NixOS)"},
+			HintText: "Command put in front of the entrypoint and steamcmd (e.g. steam-run on NixOS)"},
 	)))
 
 	web := card("Steam Web API (optional)", "Lets \"My Addons → Refresh\" list your items when using steamcmd. Get a key at steamcommunity.com/dev/apikey.",

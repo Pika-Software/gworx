@@ -21,6 +21,30 @@ const AppID = 4020
 // Branches are the known Steam branches of app 4020; any other name can be typed in.
 var Branches = []string{"public", "x86-64", "prerelease", "dev"}
 
+// Entrypoints are the start scripts for this OS. Linux uses srcds_run or srcds_run64.
+func Entrypoints() []string {
+	switch runtime.GOOS {
+	case "windows":
+		return []string{"srcds.exe", "srcds_win64.exe"}
+	case "linux":
+		return []string{"srcds_run", "srcds_run64"}
+	default:
+		return nil
+	}
+}
+
+// PresentEntrypoints returns the entrypoints that exist in dir.
+func PresentEntrypoints(dir string) []string {
+	var out []string
+	for _, name := range Entrypoints() {
+		p := filepath.Join(dir, name)
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
 // Gamemodes and Maps are suggestions for the instance form.
 var (
 	Gamemodes = []string{"sandbox", "terrortown", "base", "darkrp", "murder", "prop_hunt", "zombiesurvival"}
@@ -33,6 +57,7 @@ type Instance struct {
 	Name               string `json:"name"`
 	Dir                string `json:"dir"`
 	Branch             string `json:"branch"`
+	Binary             string `json:"binary,omitempty"` // entrypoint in Dir; empty uses the first installed one for this OS
 	Gamemode           string `json:"gamemode"`
 	Map                string `json:"map"`
 	MaxPlayers         int    `json:"max_players"`
@@ -79,11 +104,32 @@ func (i *Instance) Validate() error {
 	case i.Developer < 0 || i.Developer > 2:
 		return errors.New("developer must be 0, 1 or 2")
 	}
+	if err := validateEntrypoint(i.Binary); err != nil {
+		return err
+	}
 	if _, err := i.workshopCollectionID(); err != nil {
 		return err
 	}
 	_, err := SplitArgs(i.ExtraArgs)
 	return err
+}
+
+// validateEntrypoint accepts an entrypoint for this OS, or empty
+// (which means the first one installed in the server folder).
+func validateEntrypoint(name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil
+	}
+	for _, allowed := range Entrypoints() {
+		if name == allowed {
+			return nil
+		}
+	}
+	if len(Entrypoints()) == 0 {
+		return fmt.Errorf("Garry's Mod dedicated servers don't run on %s", runtime.GOOS)
+	}
+	return fmt.Errorf("entrypoint must be %s", strings.Join(Entrypoints(), " or "))
 }
 
 // workshopCollectionID returns the numeric collection id, or "" when unset.
@@ -105,26 +151,50 @@ func (i *Instance) Installed() bool {
 	return err == nil
 }
 
-// launcher returns the srcds start script/binary for the platform and branch.
-func (i *Instance) launcher() (string, error) {
-	var names []string
-	x64 := i.Branch == "x86-64"
-	switch runtime.GOOS {
-	case "windows":
-		names = []string{"srcds.exe", "srcds_win64.exe"}
-	case "linux":
-		names = []string{"srcds_run", "srcds_run_x64"}
-	default:
-		return "", fmt.Errorf("Garry's Mod dedicated servers don't run on %s", runtime.GOOS)
+// chosenEntrypoint is the script to start, or "" to use the first installed one.
+func (i *Instance) chosenEntrypoint() string {
+	return strings.TrimSpace(i.Binary)
+}
+
+// candidateNames are entrypoints to try, most preferred first.
+func (i *Instance) candidateNames() []string {
+	if n := i.chosenEntrypoint(); n != "" {
+		return []string{n}
 	}
-	if x64 {
-		names[0], names[1] = names[1], names[0]
+	if present := PresentEntrypoints(i.Dir); len(present) > 0 {
+		return present
+	}
+	return Entrypoints()
+}
+
+// launchName is the file the startup command shows, even before it exists.
+func (i *Instance) launchName() string {
+	if names := i.candidateNames(); len(names) > 0 {
+		return names[0]
+	}
+	if runtime.GOOS == "windows" {
+		return "srcds.exe"
+	}
+	return "srcds_run"
+}
+
+// launcher returns the entrypoint for this OS.
+func (i *Instance) launcher() (string, error) {
+	if err := validateEntrypoint(i.Binary); err != nil {
+		return "", err
+	}
+	names := i.candidateNames()
+	if len(names) == 0 {
+		return "", fmt.Errorf("Garry's Mod dedicated servers don't run on %s", runtime.GOOS)
 	}
 	for _, n := range names {
 		p := filepath.Join(i.Dir, n)
 		if st, err := os.Stat(p); err == nil && !st.IsDir() {
 			return p, nil
 		}
+	}
+	if n := i.chosenEntrypoint(); n != "" {
+		return "", fmt.Errorf("entrypoint %s was not found in %s", n, i.Dir)
 	}
 	return "", errors.New("the server is not installed yet: click Install")
 }
@@ -137,7 +207,7 @@ func (i *Instance) Args(token string) ([]string, error) {
 	}
 	args := []string{"-game", "garrysmod", "-console"}
 	if runtime.GOOS != "windows" {
-		args = append(args, "-norestart") // GWorX restarts the server itself
+		args = append(args, "-norestart") // srcds_run restarts the server itself; GWorX does that
 	}
 	args = append(args,
 		"-port", strconv.Itoa(i.Port),
@@ -193,10 +263,7 @@ func (i *Instance) Command(token, wrapper string) (string, []string, error) {
 func (i *Instance) CommandLine(token, wrapper string) string {
 	exe, err := i.launcher()
 	if err != nil {
-		exe = filepath.Join(i.Dir, "srcds_run")
-		if runtime.GOOS == "windows" {
-			exe = filepath.Join(i.Dir, "srcds.exe")
-		}
+		exe = filepath.Join(i.Dir, i.launchName())
 	}
 	args, err := i.Args(token)
 	if err != nil {

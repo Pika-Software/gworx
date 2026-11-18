@@ -325,8 +325,7 @@ Open the **Dedicated Server** tab and click **New server…**:
 1. Give the server a name and a location folder (default:
    `~/gworx/servers/<name>`). To manage a server you already have, pick its
    folder instead.
-2. Choose a branch. `x86-64` is the 64-bit server; `public`, `prerelease` and
-   `dev` are also available, or type another branch name.
+2. Choose a branch (`public`, `prerelease`, `dev`, or type another name).
 3. Confirm the install. steamcmd downloads app 4020 (a few GB) into the
    folder, and its output appears in the console.
 
@@ -337,10 +336,14 @@ Each server's page has:
 - **Install / Update**: runs steamcmd again. Tick **Validate files** to check
   every file. Run it after changing the branch.
 - **Open folder**: opens the server's location.
-- **Settings**: branch, gamemode, level, max players, port, tickrate,
-  `developer` (0/1/2), Workshop collection (`+host_workshop_collection`),
-  P2P (`-p2p`), and extra arguments. **Startup command** shows the exact
-  command line. Changes are saved when you start or restart the server.
+- **Settings**: branch, entrypoint (Linux `srcds_run` or `srcds_run64`,
+  Windows `srcds.exe` or `srcds_win64.exe`; leave empty to use the first
+  one that is installed),
+  gamemode, level, max players,
+  port, tickrate, `developer` (0/1/2), Workshop collection
+  (`+host_workshop_collection`), P2P (`-p2p`), and extra arguments.
+  **Startup command** shows the exact command line. Changes are saved when
+  you start or restart the server.
 - **Console**: live server output. Type a command and press Enter (or
   **Send**).
 
@@ -351,7 +354,7 @@ Global settings live in **Settings → Dedicated servers**:
   for app 4000. When set, every server starts with
   `+sv_setsteamaccount <token>`. The startup command preview hides it. Without
   a token the server runs anonymously and ranks lower in the server browser.
-- **Launch wrapper**: a command put in front of `srcds_run`. It defaults to
+- **Launch wrapper**: a command put in front of the entrypoint. It defaults to
   `steam-run` on NixOS, because Valve's server binaries can't find their
   libraries there otherwise.
 

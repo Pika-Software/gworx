@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"image/color"
 	"strings"
 	"sync"
 	"time"
@@ -193,6 +194,12 @@ func (lv *logView) lineAt(i int) (string, bool) {
 	return lv.lines[i], true
 }
 
+func (lv *logView) copyLines() []string {
+	lv.mu.Lock()
+	defer lv.mu.Unlock()
+	return append([]string(nil), lv.lines...)
+}
+
 func (lv *logView) slice(first, last int) []string {
 	lv.mu.Lock()
 	defer lv.mu.Unlock()
@@ -238,12 +245,16 @@ func (lv *logView) object(a *App) fyne.CanvasObject {
 // colorLine renders one console row with ANSI colour spans.
 type colorLine struct {
 	widget.BaseWidget
-	raw string
-	box *fyne.Container
+	raw   string
+	fg    color.Color
+	shown bool
+	box   *fyne.Container
 }
 
 func newColorLine() *colorLine {
-	c := &colorLine{box: container.New(layout.NewHBoxLayout())}
+	// Zero padding: the default HBox inserts theme padding between colour spans,
+	// which makes the glyphs wider than the selection measured from the plain text.
+	c := &colorLine{box: container.New(layout.NewCustomPaddedHBoxLayout(0))}
 	c.ExtendBaseWidget(c)
 	// Seed a non-empty glyph so the List template reports a real row height.
 	t := canvas.NewText("Ag", theme.Color(theme.ColorNameForeground))
@@ -256,11 +267,27 @@ func colorLineHeight() float32 {
 	return theme.TextSize() + theme.InnerPadding()
 }
 
+func sameColor(a, b color.Color) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	ar, ag, ab, aa := a.RGBA()
+	br, bg, bb, ba := b.RGBA()
+	return ar == br && ag == bg && ab == bb && aa == ba
+}
+
 func (c *colorLine) Set(raw string) {
+	fg := theme.Color(theme.ColorNameForeground)
+	// Selection refreshes the visible rows on every drag. Rebuilding the text
+	// objects when the line has not changed is what makes a fast drag stutter.
+	if c.shown && raw == c.raw && sameColor(fg, c.fg) {
+		return
+	}
+	c.shown = true
 	c.raw = raw
+	c.fg = fg
 	spans := parseANSI(raw)
 	objs := make([]fyne.CanvasObject, 0, len(spans))
-	fg := theme.Color(theme.ColorNameForeground)
 	for _, s := range spans {
 		col := s.Color
 		if col == nil {

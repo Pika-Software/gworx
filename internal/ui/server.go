@@ -130,7 +130,7 @@ func (p *serverPage) create() {
 		widget.NewFormItem("Name", name),
 		{Text: "Location", Widget: p.a.pathEntry(dir, true, nil, func(string) { dirEdited = true }),
 			HintText: "An empty folder for a new install, or an existing server folder"},
-		{Text: "Branch", Widget: branch, HintText: "x86-64 is the 64-bit server most servers use"},
+		widget.NewFormItem("Branch", branch),
 	}
 
 	d := dialog.NewForm("New dedicated server", "Create", "Cancel", items, func(ok bool) {
@@ -184,14 +184,14 @@ type instanceView struct {
 	startBtn, stopBtn, restartBtn, installBtn, deleteBtn *widget.Button
 	validate                                             *widget.Check
 
-	name, dir, workshop, extra *widget.Entry
-	branch, gamemode, level    *widget.SelectEntry
-	maxPlayers, port, tickrate *widget.Entry
-	developer                  *widget.Select
-	p2p                        *widget.Check
-	command                    *widget.Label
-	tokenNote                  *widget.Label
-	saveBtn                    *widget.Button
+	name, dir, workshop, extra      *widget.Entry
+	branch, gamemode, level, binary *widget.SelectEntry
+	maxPlayers, port, tickrate      *widget.Entry
+	developer                       *widget.Select
+	p2p                             *widget.Check
+	command                         *widget.Label
+	tokenNote                       *widget.Label
+	saveBtn                         *widget.Button
 
 	console *logView
 	input   *widget.Entry
@@ -222,6 +222,8 @@ func newInstanceView(p *serverPage, in server.Instance) *instanceView {
 	v.name = widget.NewEntry()
 	v.dir = widget.NewEntry()
 	v.branch = widget.NewSelectEntry(server.Branches)
+	v.binary = widget.NewSelectEntry(server.Entrypoints())
+	v.binary.SetPlaceHolder("auto")
 	v.gamemode = widget.NewSelectEntry(server.Gamemodes)
 	v.level = widget.NewSelectEntry(server.Maps)
 	v.maxPlayers = numberEntry()
@@ -243,10 +245,14 @@ func newInstanceView(p *serverPage, in server.Instance) *instanceView {
 	v.saveBtn = widget.NewButtonWithIcon("Save", theme.DocumentSaveIcon(), func() { v.save() })
 
 	v.load(in)
-	for _, e := range []*widget.Entry{v.name, v.dir, v.maxPlayers, v.port, v.tickrate, v.workshop, v.extra} {
+	for _, e := range []*widget.Entry{v.name, v.maxPlayers, v.port, v.tickrate, v.workshop, v.extra} {
 		e.OnChanged = func(string) { v.preview() }
 	}
-	for _, e := range []*widget.SelectEntry{v.branch, v.gamemode, v.level} {
+	v.dir.OnChanged = func(string) {
+		v.refreshEntrypoints()
+		v.preview()
+	}
+	for _, e := range []*widget.SelectEntry{v.branch, v.binary, v.gamemode, v.level} {
 		e.OnChanged = func(string) { v.preview() }
 	}
 	v.developer.OnChanged = func(string) { v.preview() }
@@ -287,6 +293,7 @@ func (v *instanceView) load(in server.Instance) {
 	v.name.SetText(in.Name)
 	v.dir.SetText(in.Dir)
 	v.branch.SetText(in.Branch)
+	v.binary.SetText(in.Binary)
 	v.gamemode.SetText(in.Gamemode)
 	v.level.SetText(in.Map)
 	v.maxPlayers.SetText(strconv.Itoa(in.MaxPlayers))
@@ -296,7 +303,16 @@ func (v *instanceView) load(in server.Instance) {
 	v.workshop.SetText(in.WorkshopCollection)
 	v.p2p.SetChecked(in.P2P)
 	v.extra.SetText(in.ExtraArgs)
+	v.refreshEntrypoints()
 	v.preview()
+}
+
+// refreshEntrypoints lists only entrypoints that exist in the server folder.
+func (v *instanceView) refreshEntrypoints() {
+	if v.binary == nil {
+		return
+	}
+	v.binary.SetOptions(server.PresentEntrypoints(strings.TrimSpace(v.dir.Text)))
 }
 
 // instance reads the form. Numbers that don't parse are left as 0 (caught by Validate).
@@ -309,6 +325,7 @@ func (v *instanceView) instance() server.Instance {
 	in.Name = strings.TrimSpace(v.name.Text)
 	in.Dir = strings.TrimSpace(v.dir.Text)
 	in.Branch = strings.TrimSpace(v.branch.Text)
+	in.Binary = strings.TrimSpace(v.binary.Text)
 	in.Gamemode = strings.TrimSpace(v.gamemode.Text)
 	in.Map = strings.TrimSpace(v.level.Text)
 	in.MaxPlayers = atoi(v.maxPlayers)
@@ -505,10 +522,15 @@ func (v *instanceView) object() fyne.CanvasObject {
 	header := container.NewBorder(nil, container.NewStack(v.progress, v.inf), nil,
 		container.NewHBox(v.status, v.deleteBtn), container.NewHScroll(toolbar))
 
+	entrypointHint := "Empty uses the first one that is installed"
+	if names := server.Entrypoints(); len(names) > 0 {
+		entrypointHint = strings.Join(names, " or ") + ". " + entrypointHint
+	}
 	form := widget.NewForm(
 		widget.NewFormItem("Name", v.name),
 		widget.NewFormItem("Location", v.p.a.pathEntry(v.dir, true, nil, nil)),
 		&widget.FormItem{Text: "Branch", Widget: v.branch, HintText: "Install / Update after changing it"},
+		&widget.FormItem{Text: "Entrypoint", Widget: v.binary, HintText: entrypointHint},
 		widget.NewFormItem("Gamemode", v.gamemode),
 		widget.NewFormItem("Level", v.level),
 		widget.NewFormItem("Max players", v.maxPlayers),
