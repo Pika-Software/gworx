@@ -15,7 +15,7 @@
     }:
     let
       lib = nixpkgs.lib;
-      version = "0.1.6";
+      version = "0.1.7";
 
       systems = [
         "x86_64-linux"
@@ -177,11 +177,13 @@
           # The wrapper keeps Nix libc and then prefers the host GLVND stack.
           gworx-appimage-program = pkgs.writeShellScript "gworx" ''
             export GWORX_REAL=${lib.getExe gworx-steamworks}
-            export GWORX_NIX_LIB_PATH=${lib.makeLibraryPath [
-              pkgs.glibc
-              pkgs.stdenv.cc.cc
-              pkgs.libgcc
-            ]}
+            export GWORX_NIX_LIB_PATH=${
+              lib.makeLibraryPath [
+                pkgs.glibc
+                pkgs.stdenv.cc.cc
+                pkgs.libgcc
+              ]
+            }
             . ${./packaging/host-gl.sh}
           '';
         in
