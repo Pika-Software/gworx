@@ -76,7 +76,7 @@ func newHistoryPage(a *App) *historyPage {
 	h.image = newThumb(192)
 	h.image.Hide()
 	h.imageBox = container.NewHBox(h.image)
-	h.detail = container.NewBorder(container.NewVBox(h.imageBox, h.details), nil, nil, nil, h.desc.Entry())
+	h.detail = container.NewBorder(container.NewVBox(h.imageBox, newCappedVScroll(h.details, 240, 200)), nil, nil, nil, h.desc.Entry())
 	h.desc.onChange = func() { h.detail.Refresh() }
 	a.previews.subscribe(func() {
 		h.list.Refresh()

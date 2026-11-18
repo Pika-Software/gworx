@@ -71,7 +71,7 @@ func newMinePage(a *App) *minePage {
 	m.image = newThumb(192)
 	m.image.Hide()
 	m.imageBox = container.NewHBox(m.image)
-	m.detail = container.NewBorder(container.NewVBox(m.imageBox, m.details), nil, nil, nil, m.desc.Entry())
+	m.detail = container.NewBorder(container.NewVBox(m.imageBox, newCappedVScroll(m.details, 240, 200)), nil, nil, nil, m.desc.Entry())
 	m.desc.onChange = func() { m.detail.Refresh() }
 	m.actions = container.NewHBox()
 	a.previews.subscribe(func() {

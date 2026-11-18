@@ -120,6 +120,39 @@ func insetSides(o fyne.CanvasObject) *fyne.Container {
 	return container.New(insetLayout{0, p, 0, p}, o)
 }
 
+// cappedVScroll scrolls wrapping text but reports a bounded minimum size.
+// A word-wrapped label's minimum height grows as its width shrinks. Inside an
+// HSplit that height becomes the window minimum, so dragging the divider
+// toward the edge makes the window resize on every frame.
+type cappedVScroll struct {
+	widget.BaseWidget
+	scroll *container.Scroll
+	minW   float32
+	maxH   float32
+}
+
+func newCappedVScroll(obj fyne.CanvasObject, minW, maxH float32) *cappedVScroll {
+	c := &cappedVScroll{scroll: container.NewVScroll(obj), minW: minW, maxH: maxH}
+	c.ExtendBaseWidget(c)
+	return c
+}
+
+func (c *cappedVScroll) CreateRenderer() fyne.WidgetRenderer {
+	return widget.NewSimpleRenderer(c.scroll)
+}
+
+func (c *cappedVScroll) MinSize() fyne.Size {
+	c.ExtendBaseWidget(c)
+	h := c.scroll.Content.MinSize().Height
+	if h > c.maxH {
+		h = c.maxH
+	}
+	if h < 1 {
+		h = c.maxH
+	}
+	return fyne.NewSize(c.minW, h)
+}
+
 // greyPanel is a rounded input-background panel with inner padding.
 // The fill follows light/dark theme changes via themedInputBg.
 func greyPanel(o fyne.CanvasObject) fyne.CanvasObject {

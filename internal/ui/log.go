@@ -16,13 +16,18 @@ import (
 const maxLogLines = 5000
 
 // logView is a scrolling list of log lines, safe to append to from any goroutine.
+// The server console (color, no timestamp) is a selectable document instead of
+// a list, so a range of output can be highlighted and copied.
 type logView struct {
 	mu      sync.Mutex
 	lines   []string
 	pending bool
+	dropped int // lines trimmed from the front since the last UI refresh
 	stamp   bool
 	color   bool // parse ANSI SGR colours (server console)
 	list    *widget.List
+	doc     *consoleDoc
+	scroll  *container.Scroll
 }
 
 func newLogView() *logView {
@@ -32,6 +37,13 @@ func newLogView() *logView {
 // newLogViewWith creates a log view; stamp prefixes lines with the time.
 func newLogViewWith(stamp bool) *logView {
 	lv := &logView{stamp: stamp, color: !stamp}
+	if lv.color {
+		lv.doc = newConsoleDoc(lv)
+		lv.scroll = container.NewScroll(lv.doc)
+		lv.doc.scroll = lv.scroll
+		lv.scroll.OnScrolled = func(fyne.Position) { lv.doc.onScroll() }
+		return lv
+	}
 	lv.list = widget.NewList(
 		func() int {
 			lv.mu.Lock()
@@ -82,7 +94,9 @@ func (lv *logView) add(line string) {
 	}
 	lv.lines = append(lv.lines, line)
 	if len(lv.lines) > maxLogLines {
-		lv.lines = lv.lines[len(lv.lines)-maxLogLines:]
+		extra := len(lv.lines) - maxLogLines
+		lv.lines = lv.lines[extra:]
+		lv.dropped += extra
 	}
 	schedule := !lv.pending
 	lv.pending = true
@@ -94,10 +108,7 @@ func (lv *logView) add(line string) {
 			lv.mu.Lock()
 			lv.pending = false
 			lv.mu.Unlock()
-			fyne.Do(func() {
-				lv.list.Refresh()
-				lv.list.ScrollToBottom()
-			})
+			fyne.Do(func() { lv.refreshDoc(true) })
 		})
 	}
 }
@@ -106,9 +117,12 @@ func (lv *logView) add(line string) {
 func (lv *logView) setLines(lines []string) {
 	lv.mu.Lock()
 	lv.lines = append([]string(nil), lines...)
+	lv.dropped = 0
 	lv.mu.Unlock()
-	lv.list.Refresh()
-	lv.list.ScrollToBottom()
+	if lv.doc != nil {
+		lv.doc.invalidate()
+	}
+	lv.refreshDoc(true)
 }
 
 func (lv *logView) text() string {
@@ -124,12 +138,92 @@ func (lv *logView) text() string {
 func (lv *logView) clear() {
 	lv.mu.Lock()
 	lv.lines = nil
+	lv.dropped = 0
 	lv.mu.Unlock()
-	lv.list.Refresh()
+	if lv.doc != nil {
+		lv.doc.invalidate()
+	}
+	lv.refreshDoc(false)
 }
 
-// panel wraps the list in the grey console background with inner padding.
+func (lv *logView) refreshDoc(follow bool) {
+	if lv.doc != nil {
+		// Snapshot under the lock. Widths and the selection are applied to that
+		// snapshot, so a line trimmed after the snapshot waits for the next refresh
+		// instead of shifting already-measured rows.
+		lv.mu.Lock()
+		dropped := lv.dropped
+		lv.dropped = 0
+		lines := append([]string(nil), lv.lines...)
+		lv.mu.Unlock()
+		lv.doc.dropPrefix(dropped)
+		lv.doc.syncLines(lines)
+		lv.doc.adjusting = true
+		lv.doc.Refresh()
+		if lv.scroll != nil {
+			lv.scroll.Refresh()
+			if follow && lv.doc.stick && !lv.doc.dragging {
+				lv.scroll.ScrollToBottom()
+			}
+		}
+		lv.doc.adjusting = false
+		return
+	}
+	lv.mu.Lock()
+	lv.dropped = 0
+	lv.mu.Unlock()
+	lv.list.Refresh()
+	if follow {
+		lv.list.ScrollToBottom()
+	}
+}
+
+func (lv *logView) length() int {
+	lv.mu.Lock()
+	defer lv.mu.Unlock()
+	return len(lv.lines)
+}
+
+func (lv *logView) lineAt(i int) (string, bool) {
+	lv.mu.Lock()
+	defer lv.mu.Unlock()
+	if i < 0 || i >= len(lv.lines) {
+		return "", false
+	}
+	return lv.lines[i], true
+}
+
+func (lv *logView) slice(first, last int) []string {
+	lv.mu.Lock()
+	defer lv.mu.Unlock()
+	if len(lv.lines) == 0 || first > last {
+		return nil
+	}
+	if first < 0 {
+		first = 0
+	}
+	if last >= len(lv.lines) {
+		last = len(lv.lines) - 1
+	}
+	if first > last {
+		return nil
+	}
+	return append([]string(nil), lv.lines[first:last+1]...)
+}
+
+func (lv *logView) plainRange(first, last int) []string {
+	raw := lv.slice(first, last)
+	for i, s := range raw {
+		raw[i] = stripANSI(s)
+	}
+	return raw
+}
+
+// panel wraps the log in the grey console background with inner padding.
 func (lv *logView) panel() fyne.CanvasObject {
+	if lv.scroll != nil {
+		return greyPanel(lv.scroll)
+	}
 	return greyPanel(lv.list)
 }
 
@@ -202,20 +296,3 @@ func (c *colorLine) MinSize() fyne.Size {
 	}
 	return fyne.NewSize(w, h)
 }
-
-func (c *colorLine) TappedSecondary(ev *fyne.PointEvent) {
-	text := stripANSI(c.raw)
-	if strings.TrimSpace(text) == "" {
-		return
-	}
-	app := fyne.CurrentApp()
-	can := app.Driver().CanvasForObject(c)
-	if can == nil {
-		return
-	}
-	widget.ShowPopUpMenuAtPosition(fyne.NewMenu("", fyne.NewMenuItem("Copy", func() {
-		app.Clipboard().SetContent(text)
-	})), can, ev.AbsolutePosition)
-}
-
-var _ fyne.SecondaryTappable = (*colorLine)(nil)
