@@ -53,6 +53,55 @@ func TestHostGL(t *testing.T) {
 		}
 	})
 
+	// Host glibc newer than Nix's: Nix libEGL must stay ahead of the host
+	// libEGL, and the vendor JSON's soname (libEGL_nvidia.so.0) must still be
+	// reachable. Vendor dirs alone do not put that soname on the loader path.
+	t.Run("newer host glibc", func(t *testing.T) {
+		root := t.TempDir()
+		libDir := filepath.Join(root, "usr", "lib", multi)
+		vendor := filepath.Join(root, "usr", "share", "glvnd", "egl_vendor.d")
+		if err := os.MkdirAll(libDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(vendor, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(libDir, "libEGL.so.1"), []byte("host"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(libDir, "libEGL_nvidia.so.0"), []byte("nv"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		nvidiaJSON := filepath.Join(vendor, "10_nvidia.json")
+		if err := os.WriteFile(nvidiaJSON, []byte("{\"ICD\":{\"library_path\":\"libEGL_nvidia.so.0\"}}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(vendor, "50_mesa.json"), []byte("{\"ICD\":{\"library_path\":\"libEGL_mesa.so.0\"}}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		const nixLibs = "/nix/libc/lib:/nix/libglvnd/lib"
+		env := runHostGL(t, root, map[string]string{
+			"LD_LIBRARY_PATH":                "",
+			"__EGL_VENDOR_LIBRARY_DIRS":      "",
+			"__EGL_VENDOR_LIBRARY_FILENAMES": "",
+			"LIBGL_DRIVERS_PATH":             "",
+			"GWORX_NIX_LIB_PATH":             nixLibs,
+		})
+		wantLD := nixLibs + ":" + libDir
+		if env["LD_LIBRARY_PATH"] != wantLD {
+			t.Fatalf("LD_LIBRARY_PATH = %q, want %q", env["LD_LIBRARY_PATH"], wantLD)
+		}
+		if !strings.Contains(env["LD_LIBRARY_PATH"], libDir) {
+			t.Fatalf("host dir with libEGL_nvidia.so.0 missing from loader path: %q", env["LD_LIBRARY_PATH"])
+		}
+		if env["__EGL_VENDOR_LIBRARY_DIRS"] != vendor {
+			t.Fatalf("EGL vendors = %q, want %q", env["__EGL_VENDOR_LIBRARY_DIRS"], vendor)
+		}
+		if env["__EGL_VENDOR_LIBRARY_FILENAMES"] != "" {
+			t.Fatalf("both vendor JSONs must stay eligible, got FILENAMES=%q", env["__EGL_VENDOR_LIBRARY_FILENAMES"])
+		}
+	})
+
 	t.Run("nixos unchanged", func(t *testing.T) {
 		root := t.TempDir()
 		if err := os.MkdirAll(filepath.Join(root, "etc"), 0o755); err != nil {

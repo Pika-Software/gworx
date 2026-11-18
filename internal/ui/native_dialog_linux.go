@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -32,17 +34,149 @@ type portalRule struct {
 	Pattern string
 }
 
+// errHostToolMissing means this helper is not installed. Another one may be.
+var errHostToolMissing = errors.New("file dialog helper not installed")
+
 // nativePick uses the XDG desktop portal (the desktop's own file chooser on
-// GNOME, KDE, ...), then zenity/kdialog, then reports errNoNativeDialog.
+// GNOME, KDE, ...). An AppImage runs in a private user namespace, and current
+// portals then refuse the request ("Unable to open /proc/<pid>/root") without
+// showing a window. kdialog — what CachyOS/KDE ships — or zenity is the
+// system chooser in that case. They are host programs, so they must not
+// inherit the AppImage's LD_LIBRARY_PATH: Nix's libc makes them exit before
+// the window is mapped.
 func nativePick(r fileRequest) (string, error) {
 	p, err := portalPick(r)
 	if !errors.Is(err, errNoNativeDialog) {
 		return p, err
 	}
-	if p, zerr := zenityPick(r); zerr == nil {
-		return p, nil
+	return hostToolPick(r)
+}
+
+func hostToolPick(r fileRequest) (string, error) {
+	tools := []struct {
+		name string
+		args []string
+	}{
+		{"kdialog", kdialogArgs(r)},
+		{"zenity", zenityArgs(r)},
+		{"qarma", zenityArgs(r)},
+	}
+	for _, tool := range tools {
+		p, err := runHostCommand(tool.name, tool.args...)
+		if err != nil {
+			continue
+		}
+		return cleanDialogPath(p), nil
 	}
 	return "", errNoNativeDialog
+}
+
+func kdialogArgs(r fileRequest) []string {
+	args := []string{"--title", r.title, "--getopenfilename", r.startFolder()}
+	if r.folder {
+		args = []string{"--title", r.title, "--getexistingdirectory", r.startFolder()}
+	} else if f := toolFilter(r.exts); f != "" {
+		args = append(args, f)
+	}
+	return args
+}
+
+func zenityArgs(r fileRequest) []string {
+	args := []string{"--file-selection", "--title=" + r.title}
+	if dir := r.startFolder(); dir != "" {
+		args = append(args, "--filename="+dir+string(os.PathSeparator))
+	}
+	if r.folder {
+		args = append(args, "--directory")
+	} else if f := toolFilter(r.exts); f != "" {
+		args = append(args, "--file-filter="+f)
+	}
+	return args
+}
+
+func toolFilter(exts []string) string {
+	pats := extPatterns(exts)
+	if len(pats) == 0 {
+		return ""
+	}
+	shown := strings.Join(pats, " ")
+	return shown + "|" + shown
+}
+
+func extPatterns(exts []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(p string) {
+		if p == "" || seen[p] {
+			return
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	for _, e := range exts {
+		e = strings.TrimSpace(e)
+		if e == "" {
+			continue
+		}
+		if !strings.HasPrefix(e, ".") && !strings.HasPrefix(e, "*") {
+			e = "." + e
+		}
+		if strings.HasPrefix(e, "*") {
+			add(strings.ToLower(e))
+			add(strings.ToUpper(e))
+			continue
+		}
+		add("*" + strings.ToLower(e))
+		add("*" + strings.ToUpper(e))
+	}
+	return out
+}
+
+func runHostCommand(name string, args ...string) (string, error) {
+	path, err := exec.LookPath(name)
+	if err != nil {
+		return "", errHostToolMissing
+	}
+	cmd := exec.Command(path, args...)
+	cmd.Env = hostDialogEnv()
+	out, err := cmd.Output()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			return "", nil
+		}
+		return "", err
+	}
+	return string(out), nil
+}
+
+func hostDialogEnv() []string {
+	return filterHostEnv(os.Environ())
+}
+
+func filterHostEnv(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, e := range env {
+		key, _, _ := strings.Cut(e, "=")
+		switch key {
+		case "LD_LIBRARY_PATH", "LD_PRELOAD", "LD_AUDIT",
+			"LIBGL_DRIVERS_PATH",
+			"__EGL_VENDOR_LIBRARY_DIRS", "__EGL_VENDOR_LIBRARY_FILENAMES":
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+func cleanDialogPath(p string) string {
+	p = strings.TrimSpace(p)
+	if strings.HasPrefix(p, "file://") {
+		if u, err := url.Parse(p); err == nil && u.Path != "" {
+			return u.Path
+		}
+	}
+	return p
 }
 
 // portalPick talks to org.freedesktop.portal.FileChooser directly. It uses a

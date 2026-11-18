@@ -15,7 +15,7 @@
     }:
     let
       lib = nixpkgs.lib;
-      version = "0.2.0";
+      version = "0.2.1";
 
       systems = [
         "x86_64-linux"
@@ -110,6 +110,7 @@
       # for it (like nwmpublisher's /usr/lib/nwmpublisher).
       # Repackages the gworx output instead of recompiling it. The binary is copied,
       # not symlinked: FindSteamAPI resolves symlinks before looking in ../lib/gworx.
+      # wrapHostGL moves that file to libexec/gworx; ../lib/gworx still matches.
       mkGworxSteamworks =
         pkgs:
         let
@@ -159,40 +160,67 @@
             mainProgram = "gworx-cli";
           };
         };
+
+      # On non-NixOS, Nix's libEGL only searches the Nix store for a GPU driver.
+      # The launcher keeps that libEGL (it matches the binary's libc, including
+      # when the host glibc is newer) and adds the host driver directories.
+      # The real ELF moves to libexec so it stays one directory below $out:
+      # FindSteamAPI looks at ../lib/gworx next to os.Executable.
+      wrapHostGL =
+        pkgs: pkg:
+        let
+          nixLibPath = lib.makeLibraryPath [
+            pkgs.glibc
+            pkgs.stdenv.cc.cc
+            pkgs.libgcc
+            pkgs.libglvnd
+          ];
+        in
+        pkgs.runCommand "${pkg.pname}-${pkg.version}"
+          {
+            inherit (pkg) pname version meta;
+          }
+          ''
+            mkdir -p $out
+            cp -r ${pkg}/. $out/
+            chmod -R u+w $out
+            mkdir -p $out/libexec
+            if [ -L "$out/bin/gworx" ]; then
+              cp -L "$out/bin/gworx" "$out/libexec/gworx"
+              rm "$out/bin/gworx"
+            else
+              mv "$out/bin/gworx" "$out/libexec/gworx"
+            fi
+            chmod 755 "$out/libexec/gworx"
+            cat > "$out/bin/gworx" <<EOF
+            #!/bin/sh
+            export GWORX_REAL=$out/libexec/gworx
+            export GWORX_NIX_LIB_PATH=${nixLibPath}
+            . ${./packaging/host-gl.sh}
+            EOF
+            chmod 755 "$out/bin/gworx"
+          '';
     in
     {
       packages = forAllSystems (
         pkgs:
         let
           system = pkgs.stdenv.hostPlatform.system;
-          gworx = mkGworx pkgs;
+          gworx = wrapHostGL pkgs (mkGworx pkgs);
           # Opt in to the unfree Steam API for this one package only.
           unfreePkgs = import nixpkgs {
             inherit system;
             config.allowUnfreePredicate = p: lib.getName p == "gworx-steamworks";
           };
-          gworx-steamworks = mkGworxSteamworks unfreePkgs;
-          # Nix's libEGL has no GPU driver outside NixOS (no /run/opengl-driver),
-          # so a bare AppImage dies with "EGL: Failed to get EGL display".
-          # The wrapper keeps Nix libc and then prefers the host GLVND stack.
-          gworx-appimage-program = pkgs.writeShellScript "gworx" ''
-            export GWORX_REAL=${lib.getExe gworx-steamworks}
-            export GWORX_NIX_LIB_PATH=${
-              lib.makeLibraryPath [
-                pkgs.glibc
-                pkgs.stdenv.cc.cc
-                pkgs.libgcc
-              ]
-            }
-            . ${./packaging/host-gl.sh}
-          '';
+          gworx-steamworks = wrapHostGL unfreePkgs (mkGworxSteamworks unfreePkgs);
         in
         {
           inherit gworx gworx-steamworks;
           gworx-cli = mkGworxCli pkgs;
           # Bundles gworx-steamworks + its closure (including libsteam_api) into one AppImage.
+          # bin/gworx is the host-GL launcher; libexec/gworx is the real ELF.
           gworx-appimage = nix-appimage.lib.${system}.mkAppImage {
-            program = gworx-appimage-program;
+            program = lib.getExe gworx-steamworks;
             pname = "gworx";
             name = "gworx-${version}-${appImageArch.${system}}.AppImage";
           };
@@ -216,9 +244,9 @@
       });
 
       overlays.default = final: prev: {
-        gworx = mkGworx final;
+        gworx = wrapHostGL final (mkGworx final);
         gworx-cli = mkGworxCli final;
-        gworx-steamworks = mkGworxSteamworks final;
+        gworx-steamworks = wrapHostGL final (mkGworxSteamworks final);
       };
 
       devShells = forAllSystems (pkgs: {

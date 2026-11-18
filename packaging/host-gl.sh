@@ -1,15 +1,22 @@
 #!/bin/sh
 # Point a Nix-built GWorX at the host OpenGL stack when it is not running on NixOS.
 #
-# The AppImage bundles Nix's libglvnd. That loader looks for GPU drivers in
-# /run/opengl-driver, which only exists on NixOS, so GLFW reports
-# "EGL: Failed to get EGL display: Success" on other distros (issue #5).
-# LD_LIBRARY_PATH is searched before DT_RUNPATH, so listing Nix libc first and
-# the host libGL/libEGL directories after keeps the binary's libc and still
-# loads the distro's GLVND.
+# Nix's libglvnd looks for GPU drivers in /run/opengl-driver, which only exists
+# on NixOS, so GLFW reports "EGL: Failed to get EGL display: Success" on other
+# distros (issues #5 and #7). The profile packages and the AppImage source this
+# script. LD_LIBRARY_PATH is searched before DT_RUNPATH.
 #
-#   GWORX_REAL          executable to run
-#   GWORX_NIX_LIB_PATH  colon-separated Nix library directories (libc, libstdc++)
+# GWORX_NIX_LIB_PATH must list Nix libc and Nix libglvnd before any host
+# directory. The binary is linked against Nix glibc, and a newer host libEGL
+# or Mesa libgallium can require GLIBC symbols that Nix does not provide.
+# Nix's libEGL is therefore the one that loads. The vendor JSON names the GPU
+# driver by soname (libEGL_nvidia.so.0); that file is found only because the
+# host library directory is later on LD_LIBRARY_PATH. Setting
+# __EGL_VENDOR_LIBRARY_DIRS by itself leaves the soname inside the Nix store
+# search and the window never opens.
+#
+#   GWORX_REAL          executable to run (the real ELF, not this script)
+#   GWORX_NIX_LIB_PATH  Nix libc, libstdc++, libgcc, then Nix libglvnd
 #   GWORX_GL_ROOT       filesystem root to inspect (default /; tests set this)
 #   GWORX_GL_ECHO=1     print the environment and do not exec
 

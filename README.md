@@ -147,6 +147,13 @@ nix profile install github:Pika-Software/gworx#gworx-steamworks  # GUI + CLI + S
 nix profile install github:Pika-Software/gworx#gworx-cli         # CLI only
 ```
 
+On NixOS those GUI packages run the program directly. On any other Linux distro
+`gworx` and `gworx-steamworks` start through a launcher that keeps Nix's libc
+and libEGL ahead of the host GPU libraries (`/usr/lib`, including
+`libEGL_nvidia.so.0`). That is what opens a Wayland window when the host glibc
+is newer than Nix's. The command on `PATH` is that launcher; the real binary is
+`libexec/gworx`, next to `lib/gworx/libsteam_api.so` in the Steamworks package.
+
 | Package            | Contents                                                                                                             |
 | ------------------ | -------------------------------------------------------------------------------------------------------------------- |
 | `gworx` (default)  | GUI + CLI. The Steamworks backend uses Garry's Mod's library or a path you set.                                      |
