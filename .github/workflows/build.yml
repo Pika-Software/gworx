@@ -160,6 +160,13 @@ jobs:
     container:
       image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-25.08
       options: --privileged
+      volumes:
+        # Updating the preinstalled SDK renames its deployment. On this
+        # runner that rename crosses an image layer and overlayfs returns
+        # "Invalid cross-device link", after which flatpak-builder crashes.
+        # An anonymous volume is a normal filesystem, and Docker copies the
+        # image's /var/lib/flatpak into it.
+        - /var/lib/flatpak
     steps:
       - uses: actions/checkout@v5
       - name: Version
