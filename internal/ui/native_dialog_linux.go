@@ -138,7 +138,7 @@ func runHostCommand(name string, args ...string) (string, error) {
 		return "", errHostToolMissing
 	}
 	cmd := exec.Command(path, args...)
-	cmd.Env = hostDialogEnv()
+	cmd.Env = hostEnv()
 	out, err := cmd.Output()
 	if err != nil {
 		var exitErr *exec.ExitError
@@ -150,7 +150,7 @@ func runHostCommand(name string, args ...string) (string, error) {
 	return string(out), nil
 }
 
-func hostDialogEnv() []string {
+func hostEnv() []string {
 	return filterHostEnv(os.Environ())
 }
 

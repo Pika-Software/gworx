@@ -456,7 +456,7 @@ func (a *App) openPath(p string) {
 	if runtime.GOOS == "windows" {
 		u.Path = "/" + u.Path
 	}
-	if err := a.fa.OpenURL(u); err != nil {
+	if err := a.openExternal(u); err != nil {
 		dialog.ShowError(err, a.win)
 	}
 }
@@ -464,7 +464,7 @@ func (a *App) openPath(p string) {
 func (a *App) openURL(raw string) {
 	u, err := url.Parse(raw)
 	if err == nil {
-		err = a.fa.OpenURL(u)
+		err = a.openExternal(u)
 	}
 	if err != nil {
 		dialog.ShowError(err, a.win)
