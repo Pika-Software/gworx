@@ -15,6 +15,7 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
+	"github.com/Pika-Software/gworx/internal/config"
 	"github.com/Pika-Software/gworx/internal/core"
 	"github.com/Pika-Software/gworx/internal/server"
 )
@@ -24,14 +25,16 @@ import (
 type serverPage struct {
 	a *App
 
-	picker *widget.Select
-	ids    []string
-	body   *fyne.Container
-	view   *instanceView
+	picker  *widget.Select
+	ids     []string
+	body    *fyne.Container
+	view    *instanceView
+	history *consoleHistoryStore
 }
 
 func newServerPage(a *App) *serverPage {
 	p := &serverPage{a: a, body: container.NewStack()}
+	p.history = loadConsoleHistory(filepath.Join(config.Dir(), "console-history.json"))
 	p.picker = widget.NewSelect(nil, func(string) { p.showSelected() })
 	p.picker.PlaceHolder = "(no servers yet)"
 	p.reload("")
@@ -194,7 +197,9 @@ type instanceView struct {
 	saveBtn                         *widget.Button
 
 	console *logView
-	input   *widget.Entry
+	suggest *suggestList
+	input   *consoleEntry
+	learned *consoleNames
 }
 
 func newInstanceView(p *serverPage, in server.Instance) *instanceView {
@@ -259,14 +264,26 @@ func newInstanceView(p *serverPage, in server.Instance) *instanceView {
 	v.p2p.OnChanged = func(bool) { v.preview() }
 
 	// console
+	v.learned = &consoleNames{}
 	v.console = newLogViewWith(false)
 	v.console.setLines(r.Lines())
-	v.input = widget.NewEntry()
-	v.input.SetPlaceHolder("Console command (status, changelevel gm_flatgrass, lua_run ...)")
+	for _, line := range r.Lines() {
+		v.noteConsole(line)
+	}
+	v.suggest = newSuggestList(v.pickSuggest)
+	v.input = newConsoleEntry(v.commandNames)
+	v.input.suggest = v.suggest
+	if p.history != nil {
+		v.input.hist.items = p.history.list(in.ID)
+	}
+	v.input.SetPlaceHolder("Command (Up/Down history, Tab completes)")
 	v.input.OnSubmitted = func(string) { v.send() }
 
 	r.SetHandlers(
-		func(line string) { v.console.add(line) },
+		func(line string) {
+			v.noteConsole(line)
+			v.console.add(line)
+		},
 		func(st server.State) { fyne.Do(func() { v.setState(st) }) },
 	)
 	v.setState(r.State())
@@ -286,7 +303,35 @@ func numberEntry() *widget.Entry {
 
 // detach stops this view from receiving runner events.
 func (v *instanceView) detach() {
+	if v.input != nil {
+		v.input.dismissSuggest()
+	}
 	v.p.mgr().Runner(v.id).SetHandlers(nil, nil)
+}
+
+func (v *instanceView) noteConsole(line string) {
+	if v.learned == nil {
+		return
+	}
+	v.learned.add(parseCvarLine(stripANSI(line)))
+}
+
+func (v *instanceView) commandNames() []string {
+	if v.learned == nil {
+		return nil
+	}
+	return v.learned.list()
+}
+
+func (v *instanceView) pickSuggest(text string) {
+	v.input.picking = true
+	v.input.applyPicked(text)
+	fyne.Do(func() {
+		v.input.picking = false
+		if v.p != nil && v.p.a != nil && v.p.a.win != nil {
+			v.p.a.win.Canvas().Focus(v.input)
+		}
+	})
 }
 
 func (v *instanceView) load(in server.Instance) {
@@ -483,6 +528,10 @@ func (v *instanceView) send() {
 		v.p.a.showError(err)
 		return
 	}
+	v.input.hist.push(cmd)
+	if v.p.history != nil {
+		v.p.history.put(v.id, v.input.hist.items)
+	}
 	v.input.SetText("")
 }
 
@@ -558,9 +607,12 @@ func (v *instanceView) object() fyne.CanvasObject {
 			v.console.clear()
 		}),
 	)
+	inputRow := container.NewBorder(nil, nil, nil, container.NewHBox(sendBtn, consoleTools), v.input)
+	gap := theme.InnerPadding()
+	bottom := container.New(insetLayout{gap, 0, gap, 0}, container.NewVBox(v.suggest, inputRow))
 	console := container.NewBorder(
 		widget.NewLabelWithStyle("Console", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		container.NewBorder(nil, nil, nil, container.NewHBox(sendBtn, consoleTools), v.input),
+		bottom,
 		nil, nil, v.console.panel(),
 	)
 

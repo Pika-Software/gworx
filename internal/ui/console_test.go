@@ -12,6 +12,35 @@ import (
 	"fyne.io/fyne/v2/theme"
 )
 
+func inConsole(x, y float32) fyne.Position {
+	return fyne.NewPos(consolePad()+x, consolePad()+y)
+}
+
+func TestConsolePadsText(t *testing.T) {
+	test.NewApp()
+	lv := newLogViewWith(false)
+	lv.setLines([]string{"alpha"})
+	wantH := consoleLineHeight() + 2*consolePad()
+	if math.Abs(float64(lv.doc.MinSize().Height-wantH)) > 0.5 {
+		t.Fatalf("height %v want %v", lv.doc.MinSize().Height, wantH)
+	}
+
+	c := test.NewCanvas()
+	c.SetPadded(false)
+	c.SetContent(lv.panel())
+	c.Resize(fyne.NewSize(360, 240))
+	root := test.WidgetRenderer(lv.doc).Objects()[0].(*fyne.Container)
+	var found bool
+	for _, o := range root.Objects {
+		if o.Visible() && o.Position() == inConsole(0, 0) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("first console line is not inset")
+	}
+}
+
 func TestSelectionText(t *testing.T) {
 	lines := []string{"ab", "cd", "éf"}
 	if got := selectionText(lines, 0, 1, 1, 1); got != "b\nc" {
@@ -92,11 +121,11 @@ func TestConsoleDragHitsDocument(t *testing.T) {
 	c.SetContent(lv.panel())
 	c.Resize(fyne.NewSize(360, 240))
 
-	pad := theme.InnerPadding()
+	pad := theme.InnerPadding() + consolePad()
 	lineH := consoleLineHeight()
 	pos := fyne.NewPos(pad+monoWidth("alph"), pad+lineH/2)
 	lv.doc.MouseDown(&desktop.MouseEvent{
-		PointEvent: fyne.PointEvent{Position: fyne.NewPos(0, lineH/2)},
+		PointEvent: fyne.PointEvent{Position: inConsole(0, lineH/2)},
 		Button:     desktop.MouseButtonPrimary,
 	})
 	test.Drag(c, pos, 12, 0)
@@ -113,11 +142,11 @@ func TestConsoleDragAndCopy(t *testing.T) {
 
 	lineH := consoleLineHeight()
 	lv.doc.MouseDown(&desktop.MouseEvent{
-		PointEvent: fyne.PointEvent{Position: fyne.NewPos(0, lineH/2)},
+		PointEvent: fyne.PointEvent{Position: inConsole(0, lineH/2)},
 		Button:     desktop.MouseButtonPrimary,
 	})
 	lv.doc.Dragged(&fyne.DragEvent{
-		PointEvent: fyne.PointEvent{Position: fyne.NewPos(monoWidth("alpha"), lineH/2)},
+		PointEvent: fyne.PointEvent{Position: inConsole(monoWidth("alpha"), lineH/2)},
 		Dragged:    fyne.NewDelta(monoWidth("alpha"), 0),
 	})
 	got := lv.doc.selectedText()
@@ -126,7 +155,7 @@ func TestConsoleDragAndCopy(t *testing.T) {
 	}
 
 	lv.doc.Dragged(&fyne.DragEvent{
-		PointEvent: fyne.PointEvent{Position: fyne.NewPos(monoWidth("ga"), lineH*1.5)},
+		PointEvent: fyne.PointEvent{Position: inConsole(monoWidth("ga"), lineH*1.5)},
 		Dragged:    fyne.NewDelta(0, lineH),
 	})
 	got = lv.doc.selectedText()
@@ -190,11 +219,11 @@ func TestSelectionXMatchesSpans(t *testing.T) {
 
 	lineH := consoleLineHeight()
 	lv.doc.MouseDown(&desktop.MouseEvent{
-		PointEvent: fyne.PointEvent{Position: fyne.NewPos(0, lineH/2)},
+		PointEvent: fyne.PointEvent{Position: inConsole(0, lineH/2)},
 		Button:     desktop.MouseButtonPrimary,
 	})
 	lv.doc.Dragged(&fyne.DragEvent{
-		PointEvent: fyne.PointEvent{Position: fyne.NewPos(m.xAt(6), lineH/2)},
+		PointEvent: fyne.PointEvent{Position: inConsole(m.xAt(6), lineH/2)},
 	})
 	if got := lv.doc.selectedText(); got != "abcdef" {
 		t.Fatalf("selection %q", got)
@@ -217,7 +246,7 @@ func TestFastDragTracksPointer(t *testing.T) {
 
 	lineH := consoleLineHeight()
 	lv.doc.MouseDown(&desktop.MouseEvent{
-		PointEvent: fyne.PointEvent{Position: fyne.NewPos(0, lineH/2)},
+		PointEvent: fyne.PointEvent{Position: inConsole(0, lineH/2)},
 		Button:     desktop.MouseButtonPrimary,
 	})
 	const steps = 80
@@ -225,7 +254,7 @@ func TestFastDragTracksPointer(t *testing.T) {
 	start := time.Now()
 	for i := 1; i <= steps; i++ {
 		lv.doc.Dragged(&fyne.DragEvent{
-			PointEvent: fyne.PointEvent{Position: fyne.NewPos(lv.doc.metrics[0].xAt(i), lineH/2)},
+			PointEvent: fyne.PointEvent{Position: inConsole(lv.doc.metrics[0].xAt(i), lineH/2)},
 		})
 	}
 	if elapsed := time.Since(start); elapsed > 2*time.Second {

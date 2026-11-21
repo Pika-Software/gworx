@@ -19,6 +19,7 @@ var consoleStyle = fyne.TextStyle{Monospace: true}
 
 // consoleDoc is the dedicated-server console: colored lines that can be
 // drag-selected and copied. It virtualizes rows so a long log stays cheap.
+// Glyphs are inset by consolePad so the text does not sit on the clip edge.
 type consoleDoc struct {
 	widget.BaseWidget
 
@@ -62,11 +63,12 @@ func (c *consoleDoc) contentSize() fyne.Size {
 	c.prepareMetrics()
 	n := len(c.metrics)
 	lineH := consoleLineHeight()
-	h := lineH
+	pad := consolePad()
+	h := lineH + pad*2
 	if n > 0 {
-		h = lineH * float32(n)
+		h = lineH*float32(n) + pad*2
 	}
-	w := c.maxW
+	w := c.maxW + pad*2
 	if w < 1 {
 		w = 1
 	}
@@ -352,7 +354,12 @@ func (c *consoleDoc) posToRowCol(p fyne.Position) (int, int) {
 	if lineH < 1 {
 		lineH = 1
 	}
-	row := int(math.Floor(float64(p.Y / lineH)))
+	pad := consolePad()
+	y := p.Y - pad
+	if y < 0 {
+		y = 0
+	}
+	row := int(math.Floor(float64(y / lineH)))
 	if row < 0 {
 		row = 0
 	}
@@ -363,7 +370,7 @@ func (c *consoleDoc) posToRowCol(p fyne.Position) (int, int) {
 	if row < 0 || row >= len(c.metrics) {
 		return row, 0
 	}
-	return row, c.metrics[row].colAt(p.X)
+	return row, c.metrics[row].colAt(p.X - pad)
 }
 
 func (c *consoleDoc) reveal(p fyne.Position) {
@@ -413,8 +420,9 @@ func (c *consoleDoc) visible() (first, last int) {
 	if view < lineH {
 		view = lineH
 	}
-	first = int(math.Floor(float64(off / lineH)))
-	last = int(math.Floor(float64((off+view)/lineH))) + 1
+	pad := consolePad()
+	first = int(math.Floor(float64((off - pad) / lineH)))
+	last = int(math.Floor(float64((off+view-pad)/lineH))) + 1
 	if first < 0 {
 		first = 0
 	}
@@ -526,6 +534,7 @@ func (r *consoleRenderer) layoutRows(first, last int) {
 		return
 	}
 	lines := c.lv.slice(first, last)
+	pad := consolePad()
 	for i := 0; i < n; i++ {
 		row := first + i
 		raw := ""
@@ -538,7 +547,7 @@ func (r *consoleRenderer) layoutRows(first, last int) {
 		if row >= 0 && row < len(c.metrics) && c.metrics[row].width > 1 {
 			w = c.metrics[row].width
 		}
-		line.Move(fyne.NewPos(0, float32(row)*lineH))
+		line.Move(fyne.NewPos(pad, pad+float32(row)*lineH))
 		line.Resize(fyne.NewSize(w, lineH))
 		line.Show()
 	}
@@ -551,6 +560,7 @@ func (r *consoleRenderer) layoutRows(first, last int) {
 func (r *consoleRenderer) placeSelection(first, last int) bool {
 	c := r.doc
 	lineH := consoleLineHeight()
+	pad := consolePad()
 	selColor := theme.Color(theme.ColorNameSelection)
 	markN := 0
 	grew := false
@@ -580,7 +590,7 @@ func (r *consoleRenderer) placeSelection(first, last int) bool {
 				x2 = x1
 			}
 			rect.FillColor = selColor
-			rect.Move(fyne.NewPos(x1, float32(row)*lineH))
+			rect.Move(fyne.NewPos(pad+x1, pad+float32(row)*lineH))
 			rect.Resize(fyne.NewSize(fyne.Max(x2-x1, 1), lineH))
 			rect.Show()
 		}
@@ -606,6 +616,12 @@ var (
 	cachedLineKey float32
 	cachedLineH   float32
 )
+
+// consolePad is the gap between console glyphs and the edge of the document.
+// The grey panel adds the same amount again outside the scroller.
+func consolePad() float32 {
+	return theme.InnerPadding()
+}
 
 func consoleLineHeight() float32 {
 	sz := theme.TextSize()
