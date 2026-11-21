@@ -72,11 +72,11 @@ func newHistoryPage(a *App) *historyPage {
 	}
 
 	h.details = wrapLabel("")
-	h.desc = newDescBox(a, 800)
+	h.desc = newDescBox()
 	h.image = newThumb(192)
 	h.image.Hide()
 	h.imageBox = container.NewHBox(h.image)
-	h.detail = container.NewBorder(container.NewVBox(h.imageBox, newCappedVScroll(h.details, 240, 200)), nil, nil, nil, h.desc.Entry())
+	h.detail = container.NewBorder(container.NewVBox(h.imageBox, newCappedVScroll(h.details, 240, 200)), nil, nil, nil, h.desc.Object())
 	h.desc.onChange = func() { h.detail.Refresh() }
 	a.previews.subscribe(func() {
 		h.list.Refresh()
@@ -194,11 +194,8 @@ func (h *historyPage) showDetails() {
 			h.a.download.setID(it.ID)
 			h.a.showWorkshopTab(0)
 		}),
+		widget.NewButtonWithIcon("Remove", theme.DeleteIcon(), func() { h.remove(it) }),
 	)
-	if h.desc.Has() {
-		acts = append(acts, h.desc.Button())
-	}
-	acts = append(acts, widget.NewButtonWithIcon("Remove", theme.DeleteIcon(), func() { h.remove(it) }))
 
 	h.actions.Objects = acts
 	h.actions.Refresh()
@@ -227,7 +224,7 @@ func (h *historyPage) fetchDescription(id uint64) {
 			}
 			desc := items[0].Description
 			cur.Description = desc
-			_ = h.a.store.AddDownload(cur) // OnChange reloads history and shows Copy
+			_ = h.a.store.AddDownload(cur) // OnChange reloads history and shows the description
 		})
 	}()
 }

@@ -184,26 +184,21 @@ func consoleCatalog() ([]string, map[string][]string) {
 func buildConsoleCatalog() {
 	zeroOne := []string{"0", "1"}
 	catalogNames = []string{
-		"status", "stats", "ping", "quit", "exit", "retry", "heartbeat",
+		"status", "stats", "ping", "quit", "exit",
 		"maps", "map", "changelevel", "gamemode", "hostname",
 		"kick", "kickid", "ban", "banid", "unban", "listid", "removeid", "writeid", "writeip", "removeip",
 		"users", "say", "exec", "find", "help", "cvarlist", "differences", "path", "version", "clear", "echo",
 		"alias", "bind", "toggle", "incrementvar", "condump", "developer",
 		"sv_cheats", "sv_password", "sv_gravity", "sv_friction", "sv_accelerate", "sv_airaccelerate",
-		"sv_maxvelocity", "sv_noclipspeed", "sv_lan", "sv_region", "sv_tags", "sv_voiceenable", "sv_alltalk",
+		"sv_maxvelocity", "sv_noclipspeed", "sv_lan", "sv_region", "sv_voiceenable", "sv_alltalk",
 		"sv_pure", "sv_allowcslua", "sv_allowupload", "sv_allowdownload", "sv_downloadurl", "sv_loadingurl",
 		"sv_timeout", "sv_maxrate", "sv_minrate", "sv_maxupdaterate", "sv_minupdaterate",
 		"sv_maxcmdrate", "sv_mincmdrate", "sv_hibernate_think", "sv_logecho", "sv_logfile", "sv_logbans",
 		"sv_rcon_banpenalty", "sv_setsteamaccount", "rcon_password",
 		"host_timescale", "host_framerate", "host_workshop_collection",
 		"net_maxfilesize", "ip", "hostport", "maxplayers",
-		"lua_run", "lua_run_cl", "lua_openscript", "lua_openscript_cl", "lua_find", "lua_dumptimers",
-		"sbox_noclip", "sbox_godmode", "sbox_playershurtplayers", "sbox_weapons",
-		"sbox_maxprops", "sbox_maxragdolls", "sbox_maxnpcs", "sbox_maxvehicles", "sbox_maxsents",
-		"gmod_admin_cleanup", "gmod_cleanup", "gm_spawn", "gm_giveswep", "gm_spawnswep", "gm_spawnsent",
-		"noclip", "god", "notarget", "kill", "give", "ent_create", "ent_remove", "ent_fire",
-		"bot_add", "bot_kick",
-		"ulx", "xgui", "fadmin", "sam",
+		"lua_run", "lua_openscript", "lua_find", "lua_dumptimers",
+		"ent_create", "ent_remove", "ent_fire",
 		"log", "logaddress_add", "logaddress_del", "logaddress_list",
 		"tv_enable", "tv_delay", "tv_name", "tv_maxclients", "tv_password", "tv_autorecord",
 	}
@@ -216,8 +211,7 @@ func buildConsoleCatalog() {
 	for _, name := range []string{
 		"sv_cheats", "sv_lan", "sv_voiceenable", "sv_alltalk", "sv_allowcslua",
 		"sv_allowupload", "sv_allowdownload", "sv_logecho", "sv_logfile", "sv_logbans",
-		"sv_hibernate_think", "sbox_noclip", "sbox_godmode", "sbox_playershurtplayers",
-		"sbox_weapons", "tv_enable", "tv_autorecord",
+		"sv_hibernate_think", "tv_enable", "tv_autorecord",
 	} {
 		catalogHints[name] = zeroOne
 	}

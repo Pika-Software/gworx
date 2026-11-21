@@ -149,7 +149,8 @@ func (u *uploadPage) inspectGMA() {
 // showThumb previews the selected image, or the current Workshop image of the item being updated.
 func (u *uploadPage) showThumb() {
 	if p := strings.TrimSpace(u.preview.Text); p != "" {
-		setThumb(u.thumb, u.a.previews.file(p))
+		img, _ := u.a.previews.file(p)
+		setThumb(u.thumb, img)
 		return
 	}
 	if id, err := workshop.ParseID(u.itemID.Text); err == nil {

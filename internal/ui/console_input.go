@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
@@ -19,6 +20,9 @@ import (
 const (
 	maxConsoleHistory  = 100
 	maxLearnedCommands = 4096
+	// maxConsoleCommand is how long a line typed into the server console may be.
+	// Longer pastes are cut so the field cannot grow without a bound.
+	maxConsoleCommand = 1024
 )
 
 // consoleEntry is the dedicated-server command box.
@@ -90,6 +94,10 @@ func (e *consoleEntry) changed(s string) {
 	if e.suppress {
 		return
 	}
+	if trimmed := limitCommand(s); trimmed != s {
+		e.applyLine(trimmed)
+		s = trimmed
+	}
 	e.hist.edit(s)
 	e.cycle = -1
 	e.base = ""
@@ -112,11 +120,19 @@ func (e *consoleEntry) applyPicked(s string) {
 }
 
 func (e *consoleEntry) applyLine(s string) {
+	s = limitCommand(s)
 	e.suppress = true
 	e.CursorRow = 0
 	e.CursorColumn = 1 << 30
 	e.SetText(s)
 	e.suppress = false
+}
+
+func limitCommand(s string) string {
+	if utf8.RuneCountInString(s) <= maxConsoleCommand {
+		return s
+	}
+	return string([]rune(s)[:maxConsoleCommand])
 }
 
 func (e *consoleEntry) complete(back bool) {

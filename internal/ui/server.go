@@ -600,14 +600,11 @@ func (v *instanceView) object() fyne.CanvasObject {
 	)
 
 	sendBtn := widget.NewButtonWithIcon("Send", theme.MailSendIcon(), v.send)
-	consoleTools := container.NewHBox(
-		widget.NewButtonWithIcon("", theme.ContentCopyIcon(), func() { v.p.a.fa.Clipboard().SetContent(v.console.text()) }),
-		widget.NewButtonWithIcon("", theme.ContentClearIcon(), func() {
-			v.p.mgr().Runner(v.id).ClearConsole()
-			v.console.clear()
-		}),
-	)
-	inputRow := container.NewBorder(nil, nil, nil, container.NewHBox(sendBtn, consoleTools), v.input)
+	clearBtn := widget.NewButtonWithIcon("", theme.ContentClearIcon(), func() {
+		v.p.mgr().Runner(v.id).ClearConsole()
+		v.console.clear()
+	})
+	inputRow := container.NewBorder(nil, nil, nil, container.NewHBox(sendBtn, clearBtn), v.input)
 	gap := theme.InnerPadding()
 	bottom := container.New(insetLayout{gap, 0, gap, 0}, container.NewVBox(v.suggest, inputRow))
 	console := container.NewBorder(

@@ -15,7 +15,7 @@
     }:
     let
       lib = nixpkgs.lib;
-      version = "0.2.2";
+      version = "0.2.3";
 
       systems = [
         "x86_64-linux"
@@ -41,7 +41,7 @@
       };
 
       # Update with: nix build .#gworx 2>&1 | grep got:
-      vendorHash = "sha256-7F7kQ38wCMoo8bAT7+iKZwUbj+A9091cotrxWL8LSWs=";
+      vendorHash = "sha256-VYjjVj2ILrvclVldYRDEx87d+JTYGGjNbhLYjpkbpSk=";
 
       # Libraries Fyne (GLFW) needs for -tags wayland.
       # GLFW uses Wayland/EGL at runtime; libX11 remains a build dep because

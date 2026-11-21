@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"unicode/utf8"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -66,6 +65,9 @@ func New(fa fyne.App, win fyne.Window, cfg *config.Config, st *store.Store) *App
 	}
 	a.previews = newPreviewCache()
 	a.svc = core.New(cfg, st, a)
+	// Private and unlisted items have no public preview URL. The logged-in
+	// Steam client can still see the ones this account published.
+	a.previews.ownerPreviews = a.svc.SW.PreviewURLs
 
 	st.OnChange = func() {
 		fyne.Do(func() {
@@ -473,14 +475,6 @@ func (a *App) openURL(raw string) {
 
 func (a *App) showError(err error) {
 	dialog.ShowError(err, a.win)
-}
-
-// truncate shortens s to at most n runes, adding an ellipsis when cut.
-func truncate(s string, n int) string {
-	if utf8.RuneCountInString(s) <= n {
-		return s
-	}
-	return string([]rune(s)[:n]) + "…"
 }
 
 func wrapLabel(s string) *widget.Label {

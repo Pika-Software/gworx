@@ -4,69 +4,111 @@ import (
 	"strings"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 )
 
-// descBox is a selectable Workshop description with a Copy action.
-// The entry stays visible so Border layouts keep a stable center slot when
-// switching items (Hide/Show was letting it jump over the meta block).
+// descBox shows a Workshop description. The text can be selected, not edited,
+// and it scrolls: the full string is kept, including text that does not wrap
+// on spaces.
 type descBox struct {
-	a        *App
-	entry    *widget.Entry
-	btn      *widget.Button
-	full     string
-	limit    int
+	view     *descScroll
 	onChange func() // parent should Refresh so the docked layout remeasures
 }
 
-func newDescBox(a *App, limit int) *descBox {
-	d := &descBox{
-		a:     a,
-		entry: newSelectableDesc(),
-		limit: limit,
-	}
-	d.btn = widget.NewButtonWithIcon("Copy description", theme.ContentCopyIcon(), d.Copy)
+func newDescBox() *descBox {
+	d := &descBox{view: newDescScroll()}
 	d.Set("")
 	return d
 }
 
-// Set updates the text and shows/hides only the Copy button.
+// Set shows s in full. Carriage returns and a trailing partial UTF-8 sequence
+// (Steam cuts descriptions on a byte boundary) are cleaned up first.
 func (d *descBox) Set(s string) {
-	d.full = s
-	d.entry.SetText(truncate(s, d.limit))
-	if strings.TrimSpace(s) == "" {
-		d.btn.Hide()
-	} else {
-		d.btn.Show()
-	}
+	d.view.setText(normalizeDesc(s))
 	if d.onChange != nil {
 		d.onChange()
 	}
 }
 
-// Copy puts the full description on the clipboard.
-func (d *descBox) Copy() {
-	if d.full == "" {
-		return
+// Object is the scrolling text view.
+func (d *descBox) Object() fyne.CanvasObject { return d.view }
+
+func normalizeDesc(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "\n")
+	return strings.ToValidUTF8(s, "\uFFFD")
+}
+
+// descScroll is a selectable label in a vertical scroll. The label is sized to
+// the viewport width so wrapping is computed there, then grown to the wrapped
+// height. A plain scroll uses the unwrapped minimum, which clips every line
+// past the first for text that has no spaces (and the tail of a long paragraph).
+type descScroll struct {
+	widget.BaseWidget
+
+	label  *widget.Label
+	scroll *container.Scroll
+}
+
+func newDescScroll() *descScroll {
+	l := widget.NewLabel("")
+	l.Wrapping = fyne.TextWrapWord
+	l.Truncation = fyne.TextTruncateOff
+	l.Selectable = true
+	s := &descScroll{
+		label:  l,
+		scroll: container.NewVScroll(l),
 	}
-	d.a.fa.Clipboard().SetContent(d.full)
+	s.ExtendBaseWidget(s)
+	return s
 }
 
-// Has reports whether a non-empty description is loaded.
-func (d *descBox) Has() bool {
-	return strings.TrimSpace(d.full) != ""
+func (s *descScroll) setText(text string) {
+	s.label.SetText(text)
+	s.Refresh()
 }
 
-// Entry is the selectable text field.
-func (d *descBox) Entry() fyne.CanvasObject { return d.entry }
+func (s *descScroll) CreateRenderer() fyne.WidgetRenderer {
+	return &descScrollRenderer{s: s, scroll: s.scroll}
+}
 
-// Button is the shared Copy description control (hide with the field when empty).
-func (d *descBox) Button() *widget.Button { return d.btn }
+func (s *descScroll) MinSize() fyne.Size {
+	s.ExtendBaseWidget(s)
+	th := s.Theme()
+	line := th.Size(theme.SizeNameText) + th.Size(theme.SizeNameLineSpacing)
+	return fyne.NewSize(120, line*4)
+}
 
-func newSelectableDesc() *widget.Entry {
-	e := widget.NewMultiLineEntry()
-	e.Wrapping = fyne.TextWrapWord
-	e.SetMinRowsVisible(3)
-	return e
+type descScrollRenderer struct {
+	s      *descScroll
+	scroll *container.Scroll
+}
+
+func (r *descScrollRenderer) Destroy() {}
+
+func (r *descScrollRenderer) Layout(size fyne.Size) {
+	w := size.Width
+	if w < 1 {
+		w = 1
+	}
+	// Width first, so MinSize height is the height of the wrapped text.
+	r.s.label.Resize(fyne.NewSize(w, size.Height))
+	h := r.s.label.MinSize().Height
+	if h < size.Height {
+		h = size.Height
+	}
+	r.s.label.Resize(fyne.NewSize(w, h))
+	r.scroll.Resize(size)
+}
+
+func (r *descScrollRenderer) MinSize() fyne.Size { return r.s.MinSize() }
+
+func (r *descScrollRenderer) Objects() []fyne.CanvasObject {
+	return []fyne.CanvasObject{r.scroll}
+}
+
+func (r *descScrollRenderer) Refresh() {
+	r.scroll.Refresh()
 }

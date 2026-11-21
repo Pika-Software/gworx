@@ -58,7 +58,7 @@ func newDownloadPage(a *App) *downloadPage {
 	d.title.Wrapping = fyne.TextWrapWord
 	d.title.Selectable = true
 	d.meta = wrapLabel("Paste a Workshop link or ID and press Enter to see the addon.")
-	d.desc = newDescBox(a, 1500)
+	d.desc = newDescBox()
 	d.desc.onChange = func() {
 		if d.body != nil {
 			d.body.Refresh()
@@ -182,8 +182,7 @@ func (d *downloadPage) object() fyne.CanvasObject {
 
 	card := container.NewBorder(nil, nil, container.NewVBox(d.preview), nil,
 		container.NewVBox(d.title, d.meta))
-	descHead := container.NewBorder(nil, nil, nil, d.desc.Button(), widget.NewLabel("Description"))
-	d.body = container.NewBorder(container.NewVBox(card, descHead), nil, nil, nil, d.desc.Entry())
+	d.body = container.NewBorder(container.NewVBox(card, widget.NewLabel("Description")), nil, nil, nil, d.desc.Object())
 
 	return container.NewBorder(top, nil, nil, nil, d.body)
 }

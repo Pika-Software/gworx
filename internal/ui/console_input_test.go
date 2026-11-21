@@ -4,7 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/driver/desktop"
@@ -152,6 +154,18 @@ func TestConsoleEntryHistoryAndTab(t *testing.T) {
 	}
 	if !e.AcceptsTab() {
 		t.Fatal("tab should stay in the command box")
+	}
+}
+
+func TestConsoleEntryLimitsLength(t *testing.T) {
+	test.NewApp()
+	e := newConsoleEntry(nil)
+	e.SetText(strings.Repeat("я", maxConsoleCommand+8))
+	if got := utf8.RuneCountInString(e.Text); got != maxConsoleCommand {
+		t.Fatalf("length %d, want %d", got, maxConsoleCommand)
+	}
+	if e.Text != strings.Repeat("я", maxConsoleCommand) {
+		t.Fatal("command was not cut on a rune boundary")
 	}
 }
 

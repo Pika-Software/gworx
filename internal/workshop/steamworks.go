@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 	"unsafe"
@@ -159,6 +160,9 @@ type steamAPI struct {
 	sendQuery            func(ugc uintptr, q uint64) uint64
 	getQueryResult       func(ugc uintptr, q uint64, index uint32, details unsafe.Pointer) bool
 	releaseQuery         func(ugc uintptr, q uint64) bool
+	// Optional. Older steam_api builds omit them; PreviewURLs then reports that.
+	createDetailsQuery func(ugc uintptr, ids *uint64, n uint32) uint64
+	getQueryPreviewURL func(ugc uintptr, q uint64, index uint32, url *byte, size uint32) bool
 
 	initialized   bool
 	warnedOffline bool
@@ -347,6 +351,12 @@ func (s *Steamworks) load() (a *steamAPI, err error) {
 	reg(&a.sendQuery, "SteamAPI_ISteamUGC_SendQueryUGCRequest")
 	reg(&a.getQueryResult, "SteamAPI_ISteamUGC_GetQueryUGCResult")
 	reg(&a.releaseQuery, "SteamAPI_ISteamUGC_ReleaseQueryUGCRequest")
+	if sym, err := lookupSymbol(lib, "SteamAPI_ISteamUGC_CreateQueryUGCDetailsRequest"); err == nil && sym != 0 {
+		purego.RegisterFunc(&a.createDetailsQuery, sym)
+	}
+	if sym, err := lookupSymbol(lib, "SteamAPI_ISteamUGC_GetQueryUGCPreviewURL"); err == nil && sym != 0 {
+		purego.RegisterFunc(&a.getQueryPreviewURL, sym)
+	}
 
 	if a.ugcFn, err = findInterface(lib, "SteamAPI_SteamUGC_v"); err != nil {
 		return nil, err
@@ -593,9 +603,11 @@ func eResultErr(r int32) error {
 
 func cString(b []byte) string {
 	if i := bytes.IndexByte(b, 0); i >= 0 {
-		return string(b[:i])
+		b = b[:i]
 	}
-	return string(b)
+	// The 8000-byte description field is cut on a byte, which splits a
+	// multibyte character. An invalid tail makes the text renderer stop.
+	return strings.ToValidUTF8(string(b), "\uFFFD")
 }
 
 func nopLog(string)       {}
@@ -887,6 +899,69 @@ func (s *Steamworks) Delete(ctx context.Context, id uint64, log Logger) error {
 		}
 		return eResultErr(int32(binary.LittleEndian.Uint32(buf[0:4])))
 	})
+}
+
+// PreviewURLs returns preview image URLs for items the logged-in user can see,
+// including private and unlisted ones the anonymous Web API omits.
+// Ids with no preview are left out. At most 50 ids are queried at a time.
+func (s *Steamworks) PreviewURLs(ctx context.Context, ids []uint64) (map[uint64]string, error) {
+	out := map[uint64]string{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+
+	err := s.do(ctx, nopLog, func(a *steamAPI) error {
+		if a.createDetailsQuery == nil || a.getQueryPreviewURL == nil {
+			return errors.New("this steam_api library can't read preview URLs")
+		}
+		const batch = 50
+		for len(ids) > 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			n := min(len(ids), batch)
+			chunk := append([]uint64(nil), ids[:n]...)
+			ids = ids[n:]
+
+			q := a.createDetailsQuery(a.ugc, &chunk[0], uint32(len(chunk)))
+			if q == 0 || q == invalidHandle {
+				return errors.New("CreateQueryUGCDetailsRequest failed")
+			}
+			buf, err := a.wait(ctx, a.sendQuery(a.ugc, q), cbUGCQueryCompleted, stallTimeout, nil)
+			if err != nil {
+				a.releaseQuery(a.ugc, q)
+				return err
+			}
+			if err := eResultErr(int32(binary.LittleEndian.Uint32(buf[8:12]))); err != nil {
+				a.releaseQuery(a.ugc, q)
+				return err
+			}
+			count := binary.LittleEndian.Uint32(buf[12:16])
+			details := make([]byte, 32*1024)
+			urlBuf := make([]byte, 2048)
+			for i := uint32(0); i < count; i++ {
+				clear(details)
+				if !a.getQueryResult(a.ugc, q, i, unsafe.Pointer(&details[0])) {
+					continue
+				}
+				if int32(binary.LittleEndian.Uint32(details[8:12])) != 1 {
+					continue
+				}
+				id := binary.LittleEndian.Uint64(details[0:8])
+				clear(urlBuf)
+				if !a.getQueryPreviewURL(a.ugc, q, i, &urlBuf[0], uint32(len(urlBuf))) {
+					continue
+				}
+				if u := cString(urlBuf); u != "" {
+					out[id] = u
+				}
+			}
+			a.releaseQuery(a.ugc, q)
+			runtime.KeepAlive(chunk)
+		}
+		return nil
+	})
+	return out, err
 }
 
 func (s *Steamworks) ListPublished(ctx context.Context, log Logger) ([]Item, error) {

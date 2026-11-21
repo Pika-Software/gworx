@@ -5,12 +5,11 @@ import (
 	"context"
 	"fmt"
 	"image"
-	"image/gif"
-	_ "image/jpeg"
 	"image/png"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,33 +23,57 @@ import (
 )
 
 const (
-	previewSize   = 256                // cached previews are scaled to fit this square
-	previewMaxAge = 7 * 24 * time.Hour // refresh cached previews after this
-	previewRetry  = 10 * time.Minute   // don't ask again for items without a preview
-	previewFetch  = 4                  // parallel image downloads
-	gifMinDelay   = 20 * time.Millisecond
+	previewSize       = 256                // cached previews are scaled to fit this square
+	previewMaxAge     = 7 * 24 * time.Hour // refresh cached previews after this
+	previewRetry      = 10 * time.Minute   // confirmed "no preview" backoff
+	previewErrorRetry = time.Minute        // network or decode failure backoff
+	previewFetch      = 4                  // parallel image downloads
+	previewMemMax     = 400                // scaled stills kept in memory
+	previewLocalMax   = 64
+	previewDownload   = 20 * time.Second
+	previewBatch      = 2 * time.Minute
+	previewOwnerWait  = 8 * time.Second // Steam client wait when the public API hid the preview URL
+	maxPreviewEdge    = 4096
+	maxCachedPNG      = 1 << 20 // larger files are recompressed off the UI thread
 )
 
-// preview is a Workshop or local image ready for a thumb widget.
+// preview is a scaled still image. GIFs are flattened to their first frame:
+// keeping every frame retained a full bitmap per frame for the life of the
+// process and decoded it on the UI thread.
 type preview struct {
-	still  fyne.Resource // first (or only) frame
-	frames []image.Image // set when animated; still matches frames[0]
-	delays []time.Duration
+	still fyne.Resource
+}
+
+type localJob struct {
+	path string
+	key  string
 }
 
 // previewCache loads Workshop preview images (memory + disk cache) and local
-// image files. Lookups never block on the network: they return what is cached
-// and queue a download; subscribers are notified when new previews arrive.
+// image files. Lookups never block on decode or the network: a small cached
+// PNG is returned immediately, everything else is queued, and subscribers are
+// notified when it is ready.
 type previewCache struct {
 	dir string
 
-	mu     sync.Mutex
-	mem    map[uint64]*preview
-	local  map[string]*preview
-	failed map[uint64]time.Time
-	queued map[uint64]bool
-	subs   []func()
-	kick   chan struct{}
+	mu           sync.Mutex
+	mem          map[uint64]*preview
+	order        []uint64 // oldest workshop id first
+	local        map[string]*preview
+	localOrder   []string
+	inflight     map[string]string // path -> newest local key being loaded
+	localPending []localJob
+	failed       map[uint64]time.Time // earliest time a missing id may be tried again
+	queued       map[uint64]bool
+	subs         []func()
+	kick         chan struct{}
+
+	// publicPreviews and ownerPreviews resolve Workshop preview URLs.
+	// publicPreviews nil means the anonymous Steam Web API. ownerPreviews
+	// is asked for items that API hides (private and unlisted); nil skips it.
+	publicPreviews func(ctx context.Context, ids ...uint64) (map[uint64]string, error)
+	ownerPreviews  func(ctx context.Context, ids []uint64) (map[uint64]string, error)
+	ownerSkip      time.Time
 }
 
 func newPreviewCache() *previewCache {
@@ -59,12 +82,13 @@ func newPreviewCache() *previewCache {
 		base = os.TempDir()
 	}
 	c := &previewCache{
-		dir:    filepath.Join(base, "gworx", "previews"),
-		mem:    map[uint64]*preview{},
-		local:  map[string]*preview{},
-		failed: map[uint64]time.Time{},
-		queued: map[uint64]bool{},
-		kick:   make(chan struct{}, 1),
+		dir:      filepath.Join(base, "gworx", "previews"),
+		mem:      map[uint64]*preview{},
+		local:    map[string]*preview{},
+		inflight: map[string]string{},
+		failed:   map[uint64]time.Time{},
+		queued:   map[uint64]bool{},
+		kick:     make(chan struct{}, 1),
 	}
 	go c.loop()
 	return c
@@ -91,79 +115,74 @@ func (c *previewCache) workshop(id uint64) *preview {
 		return nil
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	if p := c.mem[id]; p != nil {
+		c.touchLocked(id)
+		c.mu.Unlock()
 		return p
 	}
-	var p *preview
-	stale := true
-	if st, err := os.Stat(c.gifPath(id)); err == nil {
-		if data, err := os.ReadFile(c.gifPath(id)); err == nil {
-			if loaded, err := previewFromGIF(data); err == nil {
-				p = loaded
-				stale = time.Since(st.ModTime()) > previewMaxAge
-			}
+	c.mu.Unlock()
+
+	// Already-scaled PNG only. Decoding (and legacy GIFs) happens in the background.
+	if p, stale := c.cachedPNG(id); p != nil {
+		c.mu.Lock()
+		if cur := c.mem[id]; cur != nil {
+			c.touchLocked(id)
+			c.mu.Unlock()
+			return cur
 		}
-	}
-	if p == nil {
-		if st, err := os.Stat(c.pngPath(id)); err == nil {
-			if data, err := os.ReadFile(c.pngPath(id)); err == nil {
-				p = &preview{still: fyne.NewStaticResource(fmt.Sprintf("preview-%d-%d.png", id, st.ModTime().UnixNano()), data)}
-				stale = time.Since(st.ModTime()) > previewMaxAge
-			}
+		c.putMemLocked(id, p)
+		c.mu.Unlock()
+		if stale {
+			c.queue(id)
 		}
+		return p
 	}
-	if p != nil {
-		c.mem[id] = p
-	}
-	if stale {
-		if t, ok := c.failed[id]; (!ok || time.Since(t) > previewRetry) && !c.queued[id] {
-			c.queued[id] = true
-			select {
-			case c.kick <- struct{}{}:
-			default:
-			}
-		}
-	}
-	return p
+	c.queue(id)
+	return nil
 }
 
-// file returns a thumbnail of a local image, or nil if it can't be read.
-func (c *previewCache) file(path string) *preview {
+// file returns a thumbnail of a local image.
+// pending is true when path exists and its thumbnail is not ready yet;
+// callers should not fall through to another image in that case.
+func (c *previewCache) file(path string) (p *preview, pending bool) {
 	st, err := os.Stat(path)
 	if err != nil || st.IsDir() {
-		return nil
+		return nil, false
 	}
 	key := fmt.Sprintf("%s|%d|%d", path, st.Size(), st.ModTime().UnixNano())
 
 	c.mu.Lock()
-	p, ok := c.local[key]
-	c.mu.Unlock()
-	if ok {
-		return p
+	defer c.mu.Unlock()
+	if p, ok := c.local[key]; ok {
+		return p, false
 	}
+	if c.inflight[path] == key {
+		return nil, true
+	}
+	c.inflight[path] = key
+	c.localPending = append(c.localPending, localJob{path: path, key: key})
+	c.kickLocked()
+	return nil, true
+}
 
-	data, err := os.ReadFile(path)
-	if err != nil {
-		p = nil
-	} else if isGIF(data) {
-		p, err = previewFromGIF(data)
-		if err != nil {
-			p = nil
-		}
-	} else {
-		thumb, err := thumbnail(data)
-		if err != nil {
-			p = nil
-		} else {
-			p = &preview{still: fyne.NewStaticResource("local-"+filepath.Base(path)+".png", thumb)}
-		}
-	}
+func (c *previewCache) queue(id uint64) {
 	c.mu.Lock()
-	c.local[key] = p
-	c.mu.Unlock()
-	return p
+	defer c.mu.Unlock()
+	if c.queued[id] {
+		return
+	}
+	if until, ok := c.failed[id]; ok && time.Now().Before(until) {
+		return
+	}
+	c.queued[id] = true
+	c.kickLocked()
+}
+
+func (c *previewCache) kickLocked() {
+	select {
+	case c.kick <- struct{}{}:
+	default:
+	}
 }
 
 func (c *previewCache) loop() {
@@ -174,55 +193,205 @@ func (c *previewCache) loop() {
 		for id := range c.queued {
 			ids = append(ids, id)
 		}
+		jobs := c.localPending
+		c.localPending = nil
 		c.mu.Unlock()
+		if len(jobs) > 0 {
+			c.loadLocal(jobs)
+		}
 		if len(ids) > 0 {
-			c.fetch(ids)
+			c.resolve(ids)
 		}
 	}
 }
 
-func (c *previewCache) fetch(ids []uint64) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-
-	urls, err := workshop.GetPreviewURLs(ctx, ids...)
-	if err != nil {
-		urls = map[uint64]string{}
-	}
-	os.MkdirAll(c.dir, 0o755)
-
+func (c *previewCache) loadLocal(jobs []localJob) {
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, previewFetch)
-	for _, id := range ids {
+	for _, job := range jobs {
 		wg.Add(1)
-		go func() {
+		go func(job localJob) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
 			var p *preview
-			if u := urls[id]; u != "" {
-				if data, err := workshop.FetchBytes(ctx, u, 16<<20); err == nil {
-					p = c.storeFetched(id, data)
+			if data, err := os.ReadFile(job.path); err == nil {
+				if thumb, err := thumbnail(data); err == nil {
+					p = &preview{still: fyne.NewStaticResource("local-"+filepath.Base(job.path)+".png", thumb)}
 				}
 			}
-
 			c.mu.Lock()
-			delete(c.queued, id)
-			if p != nil {
-				c.mem[id] = p
-				delete(c.failed, id)
-			} else if c.mem[id] == nil {
-				c.failed[id] = time.Now()
-			}
+			c.rememberLocalLocked(job.path, job.key, p)
 			c.mu.Unlock()
-		}()
+		}(job)
 	}
 	wg.Wait()
+	c.notify()
+}
 
+func (c *previewCache) resolve(ids []uint64) {
+	var need []uint64
+	showed := false
+	for _, id := range ids {
+		c.mu.Lock()
+		have := c.mem[id] != nil
+		c.mu.Unlock()
+
+		p, stale, ok := c.diskPreview(id)
+		if ok && !have {
+			c.mu.Lock()
+			if c.mem[id] == nil {
+				c.putMemLocked(id, p)
+			}
+			c.mu.Unlock()
+			showed = true
+		}
+		if ok && !stale {
+			c.mu.Lock()
+			delete(c.queued, id)
+			delete(c.failed, id)
+			c.mu.Unlock()
+			continue
+		}
+		need = append(need, id)
+	}
+	if showed {
+		c.notify()
+	}
+	if len(need) > 0 {
+		c.fetch(need)
+	}
+}
+
+// lookupURLs returns a preview URL for each id the caller can see.
+// The bool is true when a lookup failed and a miss should be retried soon,
+// rather than treated as an item that has no preview.
+func (c *previewCache) lookupURLs(ctx context.Context, ids []uint64) (map[uint64]string, bool) {
+	lookup := c.publicPreviews
+	if lookup == nil {
+		lookup = workshop.GetPreviewURLs
+	}
+	urls, err := lookup(ctx, ids...)
+	if urls == nil {
+		urls = map[uint64]string{}
+	}
+	failed := err != nil
+
+	var hidden []uint64
+	for _, id := range ids {
+		if urls[id] == "" {
+			hidden = append(hidden, id)
+		}
+	}
+	if len(hidden) == 0 || c.ownerPreviews == nil {
+		return urls, failed
+	}
+
+	c.mu.Lock()
+	skip := time.Now().Before(c.ownerSkip)
+	c.mu.Unlock()
+	if skip {
+		return urls, true
+	}
+
+	ownerCtx, cancel := context.WithTimeout(ctx, previewOwnerWait)
+	more, err := c.ownerPreviews(ownerCtx, hidden)
+	cancel()
+	if err != nil {
+		c.mu.Lock()
+		c.ownerSkip = time.Now().Add(previewErrorRetry)
+		c.mu.Unlock()
+		return urls, true
+	}
+	for id, u := range more {
+		if u != "" {
+			urls[id] = u
+		}
+	}
+	return urls, failed
+}
+
+func (c *previewCache) fetch(ids []uint64) {
+	ctx, cancel := context.WithTimeout(context.Background(), previewBatch)
+	defer cancel()
+
+	urls, lookupFailed := c.lookupURLs(ctx, ids)
+	_ = os.MkdirAll(c.dir, 0o755)
+
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, previewFetch)
+	var changedMu sync.Mutex
+	changed := false
+	note := func(ok bool) {
+		if !ok {
+			return
+		}
+		changedMu.Lock()
+		changed = true
+		changedMu.Unlock()
+	}
+	for _, id := range ids {
+		u := urls[id]
+		if u == "" {
+			wait := previewRetry
+			if lookupFailed {
+				wait = previewErrorRetry
+			}
+			note(c.finish(id, nil, wait))
+			continue
+		}
+		wg.Add(1)
+		go func(id uint64, u string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			dlCtx, dlCancel := context.WithTimeout(ctx, previewDownload)
+			data, derr := workshop.FetchBytes(dlCtx, u, 16<<20)
+			dlCancel()
+
+			var p *preview
+			wait := previewErrorRetry
+			if derr == nil {
+				p = c.storeFetched(id, data)
+				if p == nil {
+					wait = previewRetry
+				}
+			}
+			note(c.finish(id, p, wait))
+		}(id, u)
+	}
+	wg.Wait()
+	if changed {
+		c.notify()
+	}
+}
+
+// finish stores a decoded preview, or records when a miss may be tried again.
+// It reports whether a new image was stored.
+func (c *previewCache) finish(id uint64, p *preview, retry time.Duration) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.queued, id)
+	if p != nil {
+		c.putMemLocked(id, p)
+		delete(c.failed, id)
+		return true
+	}
+	if retry > 0 && c.mem[id] == nil {
+		c.failed[id] = time.Now().Add(retry)
+	}
+	return false
+}
+
+func (c *previewCache) notify() {
 	c.mu.Lock()
 	subs := append([]func(){}, c.subs...)
 	c.mu.Unlock()
+	if len(subs) == 0 {
+		return
+	}
 	fyne.Do(func() {
 		for _, fn := range subs {
 			fn()
@@ -230,16 +399,62 @@ func (c *previewCache) fetch(ids []uint64) {
 	})
 }
 
-// storeFetched writes a downloaded preview to disk and returns the in-memory form.
-func (c *previewCache) storeFetched(id uint64, data []byte) *preview {
-	if isGIF(data) {
-		if p, err := previewFromGIF(data); err == nil && len(p.frames) > 1 {
-			if err := os.WriteFile(c.gifPath(id), data, 0o644); err == nil {
-				os.Remove(c.pngPath(id))
-				return p
-			}
-		}
+// cachedPNG reads a preview that is already a small scaled PNG.
+func (c *previewCache) cachedPNG(id uint64) (*preview, bool) {
+	st, err := os.Stat(c.pngPath(id))
+	if err != nil || st.Size() == 0 || st.Size() > maxCachedPNG {
+		return nil, false
 	}
+	data, err := os.ReadFile(c.pngPath(id))
+	if err != nil || len(data) == 0 {
+		return nil, false
+	}
+	os.Remove(c.gifPath(id))
+	return newStill(id, data, st.ModTime()), time.Since(st.ModTime()) > previewMaxAge
+}
+
+// diskPreview returns a cached still, converting a legacy GIF or an oversized
+// PNG to a scaled PNG first. ok is false when nothing usable is on disk.
+func (c *previewCache) diskPreview(id uint64) (p *preview, stale bool, ok bool) {
+	if p, stale = c.cachedPNG(id); p != nil {
+		return p, stale, true
+	}
+
+	path := ""
+	var mod time.Time
+	if st, err := os.Stat(c.gifPath(id)); err == nil {
+		path = c.gifPath(id)
+		mod = st.ModTime()
+	} else if st, err := os.Stat(c.pngPath(id)); err == nil {
+		path = c.pngPath(id)
+		mod = st.ModTime()
+	} else {
+		return nil, true, false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, true, false
+	}
+	thumb, err := thumbnail(data)
+	if err != nil {
+		os.Remove(path)
+		return nil, true, false
+	}
+	_ = os.MkdirAll(c.dir, 0o755)
+	if err := os.WriteFile(c.pngPath(id), thumb, 0o644); err != nil {
+		return nil, true, false
+	}
+	if path != c.pngPath(id) {
+		os.Remove(path)
+	}
+	if !mod.IsZero() {
+		_ = os.Chtimes(c.pngPath(id), mod, mod)
+	}
+	return newStill(id, thumb, mod), time.Since(mod) > previewMaxAge, true
+}
+
+// storeFetched writes a downloaded preview as a scaled PNG and returns it.
+func (c *previewCache) storeFetched(id uint64, data []byte) *preview {
 	thumb, err := thumbnail(data)
 	if err != nil {
 		return nil
@@ -248,93 +463,20 @@ func (c *previewCache) storeFetched(id uint64, data []byte) *preview {
 		return nil
 	}
 	os.Remove(c.gifPath(id))
-	return &preview{still: fyne.NewStaticResource(fmt.Sprintf("preview-%d-%d.png", id, time.Now().UnixNano()), thumb)}
+	return newStill(id, thumb, time.Now())
 }
 
-func isGIF(data []byte) bool {
-	return len(data) >= 6 && (string(data[:6]) == "GIF87a" || string(data[:6]) == "GIF89a")
+func newStill(id uint64, data []byte, mod time.Time) *preview {
+	stamp := mod.UnixNano()
+	if stamp == 0 {
+		stamp = time.Now().UnixNano()
+	}
+	return &preview{still: fyne.NewStaticResource(fmt.Sprintf("preview-%d-%d.png", id, stamp), data)}
 }
 
-// previewFromGIF decodes a GIF, compositing frames and scaling them to previewSize.
-// Single-frame GIFs are returned as a static preview.
-func previewFromGIF(data []byte) (*preview, error) {
-	g, err := gif.DecodeAll(bytes.NewReader(data))
-	if err != nil {
-		return nil, err
-	}
-	if len(g.Image) == 0 {
-		return nil, fmt.Errorf("empty gif")
-	}
-
-	w, h := g.Config.Width, g.Config.Height
-	if w == 0 || h == 0 {
-		b := g.Image[0].Bounds()
-		w, h = b.Dx(), b.Dy()
-	}
-	accum := image.NewNRGBA(image.Rect(0, 0, w, h))
-	frames := make([]image.Image, 0, len(g.Image))
-	delays := make([]time.Duration, 0, len(g.Image))
-
-	for i, src := range g.Image {
-		disposal := byte(0)
-		if i < len(g.Disposal) {
-			disposal = g.Disposal[i]
-		}
-
-		var backup *image.NRGBA
-		if disposal == gif.DisposalPrevious {
-			backup = cloneNRGBA(accum)
-		}
-
-		draw.Draw(accum, src.Bounds(), src, src.Bounds().Min, draw.Over)
-		frames = append(frames, scaleToFit(accum, previewSize))
-
-		d := 10 // GIF delay units are 10ms; 0 is commonly treated as 100ms
-		if i < len(g.Delay) && g.Delay[i] > 0 {
-			d = g.Delay[i]
-		}
-		delays = append(delays, time.Duration(d)*10*time.Millisecond)
-
-		switch disposal {
-		case gif.DisposalBackground:
-			draw.Draw(accum, src.Bounds(), image.Transparent, image.Point{}, draw.Src)
-		case gif.DisposalPrevious:
-			if backup != nil {
-				draw.Draw(accum, accum.Bounds(), backup, image.Point{}, draw.Src)
-			}
-		}
-	}
-
-	still, err := pngResource("gif-frame0.png", frames[0])
-	if err != nil {
-		return nil, err
-	}
-	p := &preview{still: still}
-	if len(frames) > 1 {
-		p.frames = frames
-		p.delays = delays
-	}
-	return p, nil
-}
-
-func cloneNRGBA(src *image.NRGBA) *image.NRGBA {
-	dst := image.NewNRGBA(src.Bounds())
-	copy(dst.Pix, src.Pix)
-	return dst
-}
-
-func pngResource(name string, img image.Image) (fyne.Resource, error) {
-	var out bytes.Buffer
-	if err := png.Encode(&out, img); err != nil {
-		return nil, err
-	}
-	return fyne.NewStaticResource(name, out.Bytes()), nil
-}
-
-// thumbnail decodes an image (PNG, JPEG or the first GIF frame) and scales it
-// to fit previewSize, returning PNG data.
+// thumbnail decodes the first frame of an image and scales it to previewSize.
 func thumbnail(data []byte) ([]byte, error) {
-	src, _, err := image.Decode(bytes.NewReader(data))
+	src, err := decodePreview(data)
 	if err != nil {
 		return nil, err
 	}
@@ -360,20 +502,97 @@ func scaleToFit(src image.Image, maxSide int) image.Image {
 		}
 	}
 	dst := image.NewNRGBA(image.Rect(0, 0, w, h))
-	draw.CatmullRom.Scale(dst, dst.Bounds(), src, b, draw.Over, nil)
+	draw.ApproxBiLinear.Scale(dst, dst.Bounds(), src, b, draw.Over, nil)
 	return dst
 }
 
-// thumb is a square preview image that plays animated GIFs when available.
+func (c *previewCache) putMemLocked(id uint64, p *preview) {
+	_, exists := c.mem[id]
+	c.mem[id] = p
+	c.touchLocked(id)
+	if exists {
+		return
+	}
+	guard := len(c.order) + 1
+	for len(c.mem) > previewMemMax && len(c.order) > 0 && guard > 0 {
+		guard--
+		old := c.order[0]
+		c.order = c.order[1:]
+		if old == id {
+			c.order = append(c.order, id)
+			continue
+		}
+		delete(c.mem, old)
+	}
+}
+
+func (c *previewCache) touchLocked(id uint64) {
+	for i, v := range c.order {
+		if v == id {
+			c.order = append(c.order[:i], c.order[i+1:]...)
+			break
+		}
+	}
+	c.order = append(c.order, id)
+}
+
+func (c *previewCache) rememberLocalLocked(path, key string, p *preview) {
+	if newest, ok := c.inflight[path]; ok && newest != key && localNewer(newest, key) {
+		return
+	}
+	if c.inflight[path] == key {
+		delete(c.inflight, path)
+	}
+	prefix := path + "|"
+	for k := range c.local {
+		if strings.HasPrefix(k, prefix) {
+			delete(c.local, k)
+			c.dropLocalOrder(k)
+		}
+	}
+	c.local[key] = p
+	c.localOrder = append(c.localOrder, key)
+	guard := len(c.localOrder) + 1
+	for len(c.local) > previewLocalMax && len(c.localOrder) > 0 && guard > 0 {
+		guard--
+		old := c.localOrder[0]
+		c.localOrder = c.localOrder[1:]
+		if old == key {
+			c.localOrder = append(c.localOrder, key)
+			continue
+		}
+		delete(c.local, old)
+	}
+}
+
+func (c *previewCache) dropLocalOrder(key string) {
+	for i, k := range c.localOrder {
+		if k == key {
+			c.localOrder = append(c.localOrder[:i], c.localOrder[i+1:]...)
+			return
+		}
+	}
+}
+
+func localNewer(a, b string) bool {
+	return localStamp(a) > localStamp(b)
+}
+
+func localStamp(key string) int64 {
+	i := strings.LastIndexByte(key, '|')
+	if i < 0 {
+		return 0
+	}
+	n, _ := strconv.ParseInt(key[i+1:], 10, 64)
+	return n
+}
+
+// thumb is a square still preview.
 type thumb struct {
 	widget.BaseWidget
 
 	size float32
 	img  *canvas.Image
-
-	mu  sync.Mutex
-	cur *preview
-	gen uint64
 }
 
 // newThumb returns an image view showing a placeholder until a preview is set.
@@ -383,6 +602,7 @@ func newThumb(size float32) *thumb {
 		img:  canvas.NewImageFromResource(theme.FileImageIcon()),
 	}
 	t.img.FillMode = canvas.ImageFillContain
+	t.img.ScaleMode = canvas.ImageScaleFastest
 	t.img.SetMinSize(fyne.NewSquareSize(size))
 	t.ExtendBaseWidget(t)
 	return t
@@ -396,83 +616,16 @@ func (t *thumb) MinSize() fyne.Size {
 	return fyne.NewSquareSize(t.size)
 }
 
-func (t *thumb) Hide() {
-	t.mu.Lock()
-	t.gen++
-	t.mu.Unlock()
-	t.BaseWidget.Hide()
-}
-
-func (t *thumb) Show() {
-	t.BaseWidget.Show()
-	t.mu.Lock()
-	p := t.cur
-	t.gen++
-	gen := t.gen
-	t.mu.Unlock()
-	if p != nil && len(p.frames) >= 2 {
-		go t.animate(gen, p)
-	}
-}
-
 // setThumb shows p, or the placeholder when p is nil.
 func setThumb(t *thumb, p *preview) {
-	t.setPreview(p)
-}
-
-func (t *thumb) setPreview(p *preview) {
-	t.mu.Lock()
-	if t.cur == p {
-		t.mu.Unlock()
-		return
-	}
-	t.cur = p
-	t.gen++
-	gen := t.gen
-	visible := t.Visible()
-	t.mu.Unlock()
-
-	res := theme.FileImageIcon()
+	res := fyne.Resource(theme.FileImageIcon())
 	if p != nil && p.still != nil {
 		res = p.still
+	}
+	if t.img.Resource == res && t.img.Image == nil {
+		return
 	}
 	t.img.Resource = res
 	t.img.Image = nil
 	t.img.Refresh()
-
-	if visible && p != nil && len(p.frames) >= 2 {
-		go t.animate(gen, p)
-	}
-}
-
-func (t *thumb) animate(gen uint64, p *preview) {
-	i := 0
-	for {
-		d := p.delays[i]
-		if d < gifMinDelay {
-			d = gifMinDelay
-		}
-		time.Sleep(d)
-
-		t.mu.Lock()
-		alive := t.gen == gen
-		t.mu.Unlock()
-		if !alive {
-			return
-		}
-
-		i = (i + 1) % len(p.frames)
-		frame := p.frames[i]
-		fyne.Do(func() {
-			t.mu.Lock()
-			ok := t.gen == gen
-			t.mu.Unlock()
-			if !ok {
-				return
-			}
-			t.img.Resource = nil
-			t.img.Image = frame
-			t.img.Refresh()
-		})
-	}
 }

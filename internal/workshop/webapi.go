@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 var httpClient = &http.Client{Timeout: 30 * time.Second}
@@ -58,8 +59,10 @@ type apiDetails struct {
 
 func (d *apiDetails) item() Item {
 	id, _ := strconv.ParseUint(d.PublishedFileID, 10, 64)
+	// Steam sends the body as description, file_description, or both. When both
+	// are present one of them is often a short prefix of the other.
 	desc := d.Description
-	if desc == "" {
+	if utf8.RuneCountInString(d.FileDescription) > utf8.RuneCountInString(desc) {
 		desc = d.FileDescription
 	}
 	it := Item{
@@ -181,11 +184,13 @@ func apiCall(ctx context.Context, method, endpoint string, values url.Values, ou
 }
 
 // FetchBytes downloads a small resource (e.g. a preview image).
+// A body longer than limit is an error; the extra bytes are not kept.
 func FetchBytes(ctx context.Context, u string, limit int64) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
 	}
+	req.Header.Set("User-Agent", "gworx")
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -194,14 +199,29 @@ func FetchBytes(ctx context.Context, u string, limit int64) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("%s: %s", u, resp.Status)
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, limit))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("%s: response exceeds %d bytes", u, limit)
+	}
+	return data, nil
 }
 
 // GetPreviewURLs returns the preview image URL of every public item among ids.
 // Items that are private, removed or have no preview are left out.
+// A failed batch is skipped; URLs from the batches that succeeded are still returned.
 func GetPreviewURLs(ctx context.Context, ids ...uint64) (map[uint64]string, error) {
 	out := map[uint64]string{}
+	var firstErr error
 	for len(ids) > 0 {
+		if err := ctx.Err(); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			break
+		}
 		batch := ids[:min(len(ids), 100)]
 		ids = ids[len(batch):]
 
@@ -217,7 +237,10 @@ func GetPreviewURLs(ctx context.Context, ids ...uint64) (map[uint64]string, erro
 			} `json:"response"`
 		}
 		if err := apiCall(ctx, http.MethodPost, "https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/", form, &resp); err != nil {
-			return out, err
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
 		}
 		for _, d := range resp.Response.Details {
 			if d.Result != 1 || d.PreviewURL == "" {
@@ -228,5 +251,5 @@ func GetPreviewURLs(ctx context.Context, ids ...uint64) (map[uint64]string, erro
 			}
 		}
 	}
-	return out, nil
+	return out, firstErr
 }

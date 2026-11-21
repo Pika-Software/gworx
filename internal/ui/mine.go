@@ -67,11 +67,11 @@ func newMinePage(a *App) *minePage {
 	}
 
 	m.details = wrapLabel("")
-	m.desc = newDescBox(a, 800)
+	m.desc = newDescBox()
 	m.image = newThumb(192)
 	m.image.Hide()
 	m.imageBox = container.NewHBox(m.image)
-	m.detail = container.NewBorder(container.NewVBox(m.imageBox, newCappedVScroll(m.details, 240, 200)), nil, nil, nil, m.desc.Entry())
+	m.detail = container.NewBorder(container.NewVBox(m.imageBox, newCappedVScroll(m.details, 240, 200)), nil, nil, nil, m.desc.Object())
 	m.desc.onChange = func() { m.detail.Refresh() }
 	m.actions = container.NewHBox()
 	a.previews.subscribe(func() {
@@ -85,7 +85,7 @@ func newMinePage(a *App) *minePage {
 // preview prefers the local preview image used for the last upload.
 func (m *minePage) preview(it store.Published) *preview {
 	if it.PreviewPath != "" {
-		if p := m.a.previews.file(it.PreviewPath); p != nil {
+		if p, pending := m.a.previews.file(it.PreviewPath); p != nil || pending {
 			return p
 		}
 	}
@@ -170,9 +170,6 @@ func (m *minePage) showDetails() {
 	acts := []fyne.CanvasObject{
 		update,
 		widget.NewButtonWithIcon("Open on Workshop", theme.ComputerIcon(), func() { m.a.openURL(workshop.ItemURL(it.ID)) }),
-	}
-	if m.desc.Has() {
-		acts = append(acts, m.desc.Button())
 	}
 	acts = append(acts,
 		widget.NewButtonWithIcon("Delete from Workshop", theme.DeleteIcon(), func() { m.deleteItem(it) }),
